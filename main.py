@@ -1,4 +1,6 @@
-from preprocessing.prep import TextExtractor, TextCleaner, TextSegmenter
+from preprocessing.Extraction import TextExtractor
+from preprocessing.Cleaning import TextCleaner
+from preprocessing.Segmentation import TextSegmenter
 
 
 fulltextDk = 'fulltexts/Dk_complete_tei.xml'
