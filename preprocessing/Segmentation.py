@@ -1,5 +1,6 @@
 import re
 from rw.rw import *
+from nltk import ngrams
 
 
 class TextSegmenter:
@@ -67,7 +68,7 @@ class TextSegmenter:
             if text == '':
                 continue
             if insertion == 'ignore':
-                re.sub(r'\s*(?:#INSTART#|#INEND#)\s*', ' ', text)
+                text = re.sub(r'\s*(?:#INSTART#|#INEND#)\s*', ' ', text)
 
             if insertion == 'join':
                 # TODO: Check insertion
@@ -126,15 +127,88 @@ class TextSegmenter:
 
         writeToCSV(output, csv['header'], sentences)
 
-    def segmentByNGrams(self, innput, output, n=5, insertion='join', ignoresentbounds=True):
+    def ngramsToList(self, parngrams):
+        locatedSegments = []
+        for ngram in parngrams:
+            segList = [' '.join(ngram[0])]
+            segList += ngram[1]
+            locatedSegments.append(segList)
+        return locatedSegments
+
+    def segmentByNGrams(self, innput, output, n=5, joinlines=True):
         """
+        Reads a CSV file and segments each line into n-grams with a window size
+        of n words. When joinlines is set to True (which is the default), line
+        ends are ignored and all lines belonging to the same paragraph are considered
+        to be one string.
 
-
-        :param innput:
-        :param output:
+        :param innput: Path to the input CSV.
+        :param output: Path to a CSV file for the output.
         :param n: Width of the token window (the n in n-gram).
-        :param insertion:
-        :param ignoresentbounds: May n-grams overlap sentence boundaries?
-        :return:
+        :param joinlines: Ignore line ends?
         """
-        pass
+
+        csv = readFromCSV(innput)
+
+        n_grams = []
+        parNgrams = []
+        pendinggram = None
+        location = ['', '', '', '', '']
+
+        for l in csv['lines']:
+            if (l[1] != location[0] or l[2] != location[1]) and pendinggram is not None:
+                parNgrams.append(pendinggram)
+                pendinggram = None
+
+            n_grams.extend(self.ngramsToList(parNgrams))
+            parNgrams = []
+            location = l[1:]
+
+            text = l[0].strip()
+            if text == '':
+                continue
+            text = re.sub(r'\s*(?:#SEND#|#CSTART#|#INSTART#|#INEND#)\s*', ' ', text)
+            words = text.split()
+
+            if pendinggram is not None:
+                if pendinggram[0][-1].endswith('-'):
+                    gwords = list(pendinggram[0])
+                    gwords[-1] = pendinggram[0][-1][:-1] + words.pop(0)
+                    pendinggram = (gwords, pendinggram[1])
+                parNgrams.append((pendinggram[0], pendinggram[1]))
+
+                if len(words) < n:
+                    pendingwords = list(pendinggram[0])[1:] + words
+                else:
+                    pendingwords = list(pendinggram[0])[1:] + words[0:n - 1]
+
+                pendinggrams = list(ngrams(pendingwords, n))
+
+                for i in range(len(pendinggrams)):
+                    if i < n:
+                        parNgrams.append((pendinggrams[i], pendinggram[1]))
+                    else:
+                        parNgrams.append((pendinggrams[i], location))
+
+            if len(words) < n:
+                if pendinggram is not None:
+                    pendinggram = None
+                    continue
+                else:
+                    pendinggram = (tuple(words), location)
+                    continue
+            else:
+                pendinggram = None
+
+            tNgrams = list(ngrams(words, n))
+
+            if joinlines:
+                pendinggram = (tNgrams.pop(-1), location)
+
+            for ngram in tNgrams:
+                parNgrams.append((ngram, location))
+
+        if pendinggram is not None:
+            parNgrams.append(pendinggram)
+        n_grams.extend(self.ngramsToList(parNgrams))
+        writeToCSV(output, csv['header'], n_grams)
