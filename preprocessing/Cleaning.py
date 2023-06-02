@@ -28,7 +28,7 @@ class TextCleaner:
             addnorm = readDictFromCSV(addnorm)
         for l in csv['lines']:
             l[0] = self.cleanText(l[0], normalize, addnorm)
-            #l[0] = self.joinlineends(l[0])
+            l[0] = self.joinlineends(l[0])
             if normalize:
                 l[0] = self.joinprefixes(l[0])
         writeToCSV(output, csv['lines'], header=csv['header'])
