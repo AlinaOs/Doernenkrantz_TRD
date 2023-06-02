@@ -1,25 +1,40 @@
 import re
 from rw.rw import *
 from nltk import ngrams
+import os.path
 
 
 class TextSegmenter:
-    INSERTION = {'sentbound', 'join', 'ignore'}
     """
+    The Text Segmenter provides functions for segmenting text into sentences and/or n-grams.
+    """
+
+    '''
     sentbound: Treat insertion markers like sentence boundaries
     ignore: Ignore insertion markers and treat insertions as part of the text surrounding them.
     join: Create two segments: One ignoring the insertion markers and an additional segment ignoring the insertion text.
-    """
+    '''
+    INSERTION = {'sentbound', 'join', 'ignore'}
 
     def segmentsToList(self, parsegments):
         locatedSegments = []
         for seg in parsegments:
-            segList = [seg[0]]
-            segList += seg[1]
-            locatedSegments.append(segList)
+            if str(seg[0]).find('#INSTART#') >= 0:
+                text = seg[0].replace('#INPOINT#', '#SEND#')
+                sentences = re.findall(r'(?<=#INSTART#).*?(?=#INEND#)', text)
+                sentences.append(text)
+                sentences.append(re.sub(r'\s*#INSTART#.*?#INEND#\s*', ' ', text))
+                for sent in sentences:
+                    locsent = [sent]
+                    locsent.extend(seg[1])
+                    locatedSegments.extend(self.segmentBySentences([locsent], insertion='ignore'))
+            else:
+                segList = [seg[0]]
+                segList += seg[1]
+                locatedSegments.append(segList)
         return locatedSegments
 
-    def segmentBySentences(self, innput, output, minwords=4, insertion='join'):
+    def segmentBySentences(self, innput, output=None, header=None, minwords=4, insertion='join'):
         """
         Segments the text of input into sentences and saves the resulting segments with their corresponding
         text locations to output.
@@ -29,12 +44,18 @@ class TextSegmenter:
         previous and next sentence.
         Depending on the value of insertion, insertions will be treated as sentence ends, ignored or added.
 
-        :param innput: The path to the input file.
-        :param output: The path to where the output shall be written.
+        :param innput: An input list or the path to the file containing the list as CSV.
+        :param output: The path to where the output shall be written (optional).
+        :param header: A list containing the headings of each csv-column. If None, the header will be extracted from the innput csv or will be filled with '?', if the innput is a list.
         :param minwords: Minimal number of words in a sentence.
         :param insertion: Treat insertions as sentence ends ('sentbound'), 'ignore' them, or add a sentence ignoring the insertion ('join').
         """
-        csv = readFromCSV(innput)
+        csv = None
+        if isinstance(innput, str) and os.path.isfile(innput):
+            csv = readFromCSV(innput)
+            innput = csv['lines']
+        elif not isinstance(innput, list):
+            return []
 
         split = r'\s*(?:#SEND#)|(?:#CSTART#)\s*'
         if insertion == r'sentbound':
@@ -45,7 +66,7 @@ class TextSegmenter:
         pendingsent = None
         location = ['', '', '', '', '']
 
-        for l in csv['lines']:
+        for l in innput:
             if (l[1] != location[0] or l[2] != location[1]) and pendingsent is not None:
                 if int(pendingsent[1]) < minwords and len(parsentences) > 0:
                     last = parsentences.pop()
@@ -67,12 +88,20 @@ class TextSegmenter:
             text = l[0].strip()
             if text == '':
                 continue
-            if insertion == 'ignore':
-                text = re.sub(r'\s*(?:#INSTART#|#INEND#)\s*', ' ', text)
 
             if insertion == 'join':
-                # TODO: Check insertion
-                pass
+                intexts = re.findall(r'#INSTART#.+?(?:$|#INEND#)', text)
+                closingintexts = re.findall(r'#DNENI#[^I]+(?=$)', text[::-1])
+                for c in closingintexts:
+                    intexts.append(c[::-1])
+                for i in intexts:
+                    if i == '':
+                        continue
+                    newi = re.sub(r'#SEND#', '#INPOINT#', i)
+                    text = text.replace(i, newi)
+
+            if insertion == 'ignore':
+                text = re.sub(r'\s*(?:#INSTART#|#INEND#)\s*', ' ', text)
 
             text = re.split(split, text.strip())
             for sent in text:
@@ -112,20 +141,31 @@ class TextSegmenter:
                 words = len(sent.split())
                 pendingsent = (sent, words, location)
 
-        if int(pendingsent[1]) < minwords and len(parsentences) > 0:
-            last = parsentences.pop()
-            leftover = ' '.join([last[0], pendingsent[0].strip()])
-            if pendingsent[1] > len(last[0].split()):
-                location = pendingsent[2]
+        if pendingsent is not None:
+            if int(pendingsent[1]) < minwords and len(parsentences) > 0:
+                last = parsentences.pop()
+                leftover = ' '.join([last[0], pendingsent[0].strip()])
+                if pendingsent[1] > len(last[0].split()):
+                    location = pendingsent[2]
+                else:
+                    location = last[1]
             else:
-                location = last[1]
-        else:
-            leftover = pendingsent[0].strip()
+                leftover = pendingsent[0].strip()
 
-        parsentences.append((leftover, location))
+            parsentences.append((leftover, location))
+
         sentences.extend(self.segmentsToList(parsentences))
 
-        writeToCSV(output, csv['header'], sentences)
+        if output is not None:
+            if header is not None:
+                writeToCSV(output, sentences, header=header)
+            elif csv is not None:
+                writeToCSV(output, sentences, header=csv['header'])
+            else:
+                writeToCSV(output, sentences, header=['?' for i in range(len(sentences[0]))])
+
+        return sentences
+
 
     def ngramsToList(self, parngrams):
         locatedSegments = []
@@ -158,7 +198,7 @@ class TextSegmenter:
         for l in csv['lines']:
             if (l[1] != location[0] or l[2] != location[1]) and pendinggram is not None:
                 parNgrams.append(pendinggram)
-                pendinggram = None
+                pendinggram = None ##
 
             n_grams.extend(self.ngramsToList(parNgrams))
             parNgrams = []
@@ -175,7 +215,7 @@ class TextSegmenter:
                     gwords = list(pendinggram[0])
                     gwords[-1] = pendinggram[0][-1][:-1] + words.pop(0)
                     pendinggram = (gwords, pendinggram[1])
-                parNgrams.append((pendinggram[0], pendinggram[1]))
+                parNgrams.append((pendinggram[0], pendinggram[1])) ##
 
                 if len(words) < n:
                     pendingwords = list(pendinggram[0])[1:] + words
@@ -192,23 +232,25 @@ class TextSegmenter:
 
             if len(words) < n:
                 if pendinggram is not None:
-                    pendinggram = None
+                    pendinggram = None ##
                     continue
                 else:
-                    pendinggram = (tuple(words), location)
+                    pendinggram = (tuple(words), location) ##
                     continue
             else:
-                pendinggram = None
+                pendinggram = None ##
 
             tNgrams = list(ngrams(words, n))
 
             if joinlines:
-                pendinggram = (tNgrams.pop(-1), location)
+                pendinggram = (tNgrams.pop(-1), location) ##
 
             for ngram in tNgrams:
                 parNgrams.append((ngram, location))
 
         if pendinggram is not None:
-            parNgrams.append(pendinggram)
+            parNgrams.append(pendinggram) ##
         n_grams.extend(self.ngramsToList(parNgrams))
-        writeToCSV(output, csv['header'], n_grams)
+        writeToCSV(output, n_grams, header=csv['header'])
+
+        #TODO insertion for Ngrams?

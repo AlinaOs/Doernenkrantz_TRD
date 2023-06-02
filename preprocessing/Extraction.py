@@ -8,7 +8,7 @@ class TextExtractor:
     xmlns = '{http://www.w3.org/XML/1998/namespace}'
     ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
-    def joinLines(self, lines, join=' '):
+    def joinLines(self, lines, join='#lb#'):
         cleanLines = []
         for line in lines:
             if line.text is not None:
@@ -174,20 +174,20 @@ class TextExtractor:
                         ])
                     pageLines.clear()
 
-        writeToCSV(outputPath, [
+        writeToCSV(outputPath, pagesText, header=[
             'text',
             'bookpart',
             'paragraph',
             'page',
             'fol',
             'gathering'
-        ], pagesText)
+        ])
 
-        writeToCSV(metaOutputPath, [
+        writeToCSV(metaOutputPath, metaText, header=[
             'text',
             'bookpart',
             'paragraph',
             'page',
             'fol',
             'gathering'
-        ], metaText)
+        ])

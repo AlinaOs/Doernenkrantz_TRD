@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import csv
+import json
 
 
 def getXMLRoot(path):
@@ -8,10 +9,11 @@ def getXMLRoot(path):
     return root
 
 
-def writeToCSV(path, header, lines):
+def writeToCSV(path, lines, header=None, delimiter=','):
     with open(path, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(header)
+        writer = csv.writer(csvfile, delimiter=delimiter)
+        if header is not None:
+            writer.writerow(header)
         writer.writerows(lines)
 
 
