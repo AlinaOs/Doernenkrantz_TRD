@@ -1,0 +1,6 @@
+desc,regex
+auf,(?<!\w)[uv]p\s\w+
+an,(?<!\w)an\s\w+
+aus,(?<!\w)[uv][ijy](?:ss?|ß)\s\w+
+her,(?<!\w)her\s\w+
+zer/zur,(?<!\w)t?z[eu]r\s\w+

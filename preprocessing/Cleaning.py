@@ -1,26 +1,51 @@
 import re
 from rw.rw import *
+from py3langid.langid import LanguageIdentifier, MODEL_FILE
 
 
 class TextCleaner:
+    dict = {}
+    lidentifier = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
+    lidentifier.set_languages(['la', 'de'])
+    standardCSnorm = []
+    standardLCnorm = []
+    prefixes = []
 
-    def cleanTextFromCSV(self, input, output, normalize=None):
-        csv = readFromCSV(input)
-        for l in csv['lines']:
-            l[0] = self.cleanText(l[0], normalize)
-        writeToCSV(output, csv['header'], csv['lines'])
-
-    def cleanText(self, text: str, normalize=None):
+    def __init__(self, standardCSnorm, standardLCnorm, prefixes):
         """
-        Cleans the given text by dealing with punctuation, whitespaces and case.
-        If normalize is set to true, simple replacements of some letters/letter combinations will be made to
-        normalize the spelling of the text.
-        The returned text will be lowercase and punctuation ('.', ':', '!') as well as brackets will be marked
-        by '#BOUND#' or '#INSTART#'/'#INEND#' respectively. Chapter beginnings (Capitulum) will be marked
+        Initializes and returns a TextCleaner.
+
+        :param standardCSnorm: Path to CSV file containing normalization rules that are case-sensitive.
+        :param standardLCnorm: Path to CSV file containing normalization rules that are case-insensitive (lowercase).
+        """
+        self.standardCSnorm = readDictFromCSV(standardCSnorm)
+        self.standardLCnorm = readDictFromCSV(standardLCnorm)
+        self.prefixes = readDictFromCSV(prefixes)
+
+    def cleanTextFromCSV(self, input, output, normalize=True, addnorm=None):
+        csv = readFromCSV(input)
+        if addnorm is not None:
+            addnorm = readDictFromCSV(addnorm)
+        for l in csv['lines']:
+            l[0] = self.cleanText(l[0], normalize, addnorm)
+            #l[0] = self.joinlineends(l[0])
+            if normalize:
+                l[0] = self.joinprefixes(l[0])
+        writeToCSV(output, csv['lines'], header=csv['header'])
+
+    def cleanText(self, text: str, normalize=True, addnorm=None):
+        """
+        Cleans the given text by dealing with punctuation, whitespaces and case. If normalize is set to True (default),
+        standard normalization will be performed based on the normalization rules that were initiated with the
+        TextCleaner object. If the function parameter addnorm is not None, the given normalization rules will be
+        performed additionally (this will happen after the standard normalization, if normalize is set to True).
+        The returned text will be lowercase and punctuation ('.', ':', '!') as well as brackets will be
+        marked by '#SEND#' or '#INSTART#'/'#INEND#' respectively. Chapter beginnings (Capitulum) will be marked
         by '#CSTART#'. Whitespace gets normalized, but trailing and leading whitespaces won't be trimmed.
 
         :param text: The text to be cleaned.
-        :param normalize: Indicates whether the spelling of the text will be normalized by naive replacing.
+        :param normalize:
+        :param addnorm: Further rules for normalization as list or path to a CSV file containing the rules.
         :return: The cleaned text.
         """
 
@@ -28,20 +53,22 @@ class TextCleaner:
         for m in re.findall(r'[a-zßöů][A-Z]', text):
             text = text.replace(m, m[0]+' '+m[1])
 
-        # lowercase
-        text = text.lower()
+        # Delete whitespaces, where the following token is a single word character and therefore most likely
+        # cut off from the previous token due to OCR problems or poor print quality.
+        # Note: Some characters are excluded because they could indeed represent a word or roman number on their own.
+        text = re.sub(r'(?<=\w)\s(?=[befghknopqrstwyz]\W)', '', text)
 
         # replace points in/around numbers and "/" with whitespace
         text = text.replace('/', ' ')
         for m in re.findall(
-                r'(?:^|[.\s]+)[ijvxlcdm]+[.\sijvxlcdm]*(?:$|[.\s]+)',
+                r'(?:^|[.\s]+)[ijvxlcdmIJVXLCDM]+[.\sijvxlcdmIJVXLCDM]*(?:$|[.\s]+)',
                 text):
 
             if m == '':
                 continue
 
-            rvil = r'(?<=[\s.])v[ij]{1,2}l{1,2}(?=[\s.])'
-            rim = r'(?<=[\s.])[ij]{1,2}m(?=[\s.])'
+            rvil = r'(?<=[\s.])[vV][ij]{1,2}l{1,2}(?=[\s.])'
+            rim = r'(?<=[\s.])[ijIJ]{1,2}m(?=[\s.])'
             if len([f for f in re.findall(rvil, m) if f != '']) != 0:
                 # The regex also matches substrings such as 'vil' and 'im' that are no numbers
                 # Those matches need to be ignored.
@@ -56,31 +83,21 @@ class TextCleaner:
 
             text = text.replace(old, ' ' + old.replace('.', '').replace(' ', '') + ' ')
 
-        # normalize orthography
-        if normalize is not None:
-            rules = readDictFromCSV(normalize)
+        if normalize:
+            text = self.normalizeText(text)
+
+        # apply individual normalizations given as function parameter
+        if addnorm is not None:
+            if isinstance(addnorm, list):
+                rules = addnorm
+            else:
+                rules = readDictFromCSV(addnorm)
             for rule in rules:
-                if rule['exemption'] == '':
-                    text = re.sub(rule['regex'], rule['replace'], text)
-                else:
-                    exemptions = rule['exemption'].split(';')
-                    if rule['exemption2'] != '':
-                        exemptions2 = rule['exemption2'].split(';')
-                    else:
-                        exemptions2 = []
-                    for m in re.findall(r'(?<=^)|(?<=\s)\S*'+str(rule['regex'])+r'\S*(?=\s|$)', text):
-                        if m.strip() == '':
-                            continue
-                        for e in exemptions:
-                            if re.fullmatch(e, m) is None:
-                                text = text.replace(m, re.sub(rule['regex'], rule['replace'], m))
-                            else:
-                                for e2 in exemptions2:
-                                    if re.fullmatch(e2, m):
-                                        text = text.replace(m, re.sub(rule['regex'], rule['replace'], m))
+                text = re.sub(rule['regex'], rule['replace'], text)
 
         # replace punctuation, chapter marks and brackets with boundary markers
-        text = text.replace('#', '#CSTART#')
+        text = re.sub(r'(?<!#lb)#(?!lb#)', '#CSTART#', text)
+        # text.replace('#', '#CSTART#')
         text = text.replace('⸿', '#CSTART#')
         text = text.replace('.', '#SEND#')
         text = text.replace(':', '#SEND#')
@@ -90,5 +107,155 @@ class TextCleaner:
 
         # normalize whitespace (no trimming)
         text = re.sub(r'\s+', ' ', text)
+        self.updatedict(text)
 
+        return text
+
+    def normalizeText(self, text):
+        # apply normalization rules that need case-sensitivity
+        for rule in self.standardCSnorm:
+            text = re.sub(rule['regex'], rule['replace'], text)
+
+        # lowercase
+        text = text.lower()
+
+        # apply normalization rules that aren't case-sensitive (lowercase)
+        for rule in self.standardLCnorm:
+            text = re.sub(rule['regex'], rule['replace'], text)
+
+        return text
+
+    def updatedict(self, text):
+        text = re.sub(r'\w+#lb#\w+', '', text)
+        text = re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ', text)
+        tokens = text.split()
+        for token in tokens:
+            if token in self.dict.keys():
+                self.dict[token] = self.dict[token]+1
+            else:
+                self.dict[token] = 1
+
+    def joinprefixes(self, text):
+        """
+        Tests, whether a lonely prefix has to be joined with the following word.
+        The prefixes that are considered are those initiated with the TextCleaner object and the method used for
+        checking whether two words should be joined is the class's joinwords method.
+        :param text: The text, that needs checking for prefix joins.
+        :return: The updated text.
+        """
+        for pre in self.prefixes:
+            candidates = re.findall(pre['regex'], text)
+            if len(candidates) > 0:
+                text = self.joinwords(text, candidates, ' ', invocab=True, joinright=True)
+        return text
+
+    def joinlineends(self, text):
+        """
+        Tests, whether tokens separated by linebreaks (marked as "#lb" in the
+        input text) are actually only one word. If yes, then the tokens get joined.
+        If not, they stay separate words and the linebreak marker is replaced by a
+        whitespace character. The method used for
+        checking whether two words should be joined is the class's joinwords method.
+
+        :param text: The input text, where linebreaks are marked as '#lb#'.
+        :return: The text with all linebreaks either removed or replaced by a whitespace.
+        """
+        candidates = re.findall(r'\w+#lb#\w+', text)
+        text = self.joinwords(text, candidates, '#lb#')
+        text = text.replace('#lb#', ' ')
+        text = re.sub(r'\s+', ' ', text)
+        return text
+
+    def joinwords(self, text, candidates, separator, joinright=False, invocab=False):
+        """
+        Tests whether two tokens (the candidate pair) form one single word and should therefore be joined.
+        The algorithm works naively and linguistically uninformed, but is based on the
+        vocabulary saved as class variable of the TextCleaner. It applies the following
+        rules (t1 = token 1, t2= token 2, j = both tokens joined, v = vocabulary):
+
+        1. not t1 and not t2 and not j: seperate
+        2. not t1 and not t2 and j: join
+        3. t1 xor t2 and not j: join, if the non-existing token has 3 or less characters, else separate
+        4. t1 xor t2 and j: join, if freq(j) > freq(t), else separate
+        5. t1 and t2 and j: join, if freq(j) > (freq(t1) + freq(t2))/2, else separate
+        6. t1 and t2 and not j: separate
+
+        The performance is circa 40% recall and circa 96-99% precision for token pairs forming
+        a single word.
+
+        This behaviour can be changed by setting joinright to True (default: False). Thereby, only the second (i.e., the
+        right) token of a candidate pair is crucial in deciding whether to join or not. The candidate pair gets joined
+        if 1. the joined word exists in the vocabulary, 2. the second join candidate token has more than three
+        characters, and 3. the joined word is more frequent than the second token on its own.
+
+        After joining or separating the tokens, the class's vocabulary gets updated.
+
+        :param text: The input text.
+        :param candidates: Possible candidates for joining preselected with some reasonable rule.
+        :param separator: The string that marks the point of separation between the two tokens of each candidate.
+        :param joinright: Indicates, whether only the second token of a candidate pair is crucial for joining.
+        :param invocab: Indicates whether the tokens of a candidate pair are already accounted for in the vocabulary.
+        :return: The text where each candidate pair of tokens is either joined or separated by a whitespace.
+        """
+        for c in candidates:
+            j = False
+            joined = self.cleanText(str(c).replace(separator, ''))
+            separated = str(c).split(separator)
+
+            noj = self.dict[joined] if joined in self.dict.keys() else False
+            nosep1 = self.dict[separated[0]] if separated[0] in self.dict.keys() else False
+            nosep2 = self.dict[separated[1]] if separated[1] in self.dict.keys() else False
+
+            if joinright:
+                j = True if noj and len(separated[1]) > 3 and nosep2 < noj else False
+            else:
+                if not noj and not nosep1 and not nosep2:
+                    # 1
+                    j = False
+                elif noj and not nosep1 and not nosep2:
+                    # 2
+                    j = True
+                elif not noj and nosep1 and nosep2:
+                    # 6
+                    j = False
+                elif noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
+                    # 4
+                    septext = separated[0] if nosep1 else separated[1]
+                    lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
+                    if lg[0] == 'la' and lg[1] > 0.8:
+                        j = False
+                    else:
+                        sep = nosep1 if nosep1 else nosep2
+                        j = True if noj > sep else False
+                elif not noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
+                    # 3
+                    septext = separated[0] if nosep1 else separated[1]
+                    lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
+                    if lg[0] == 'la' and lg[1] > 0.8:
+                        j = False
+                    else:
+                        sep = separated[0] if nosep2 else separated[1]
+                        j = True if len(sep) <= 3 else False
+                elif noj and nosep1 and nosep2:
+                    # 5
+                    lg1 = self.lidentifier.classify(' '.join([separated[0] for i in range(6)]))
+                    lg2 = self.lidentifier.classify(' '.join([separated[1] for i in range(6)]))
+                    if (lg1[0] == 'la' and lg1[1] > 0.8) or (lg2[0] == 'la' and lg2[1] > 0.8):
+                        j = False
+                    else:
+                        j = True if noj > (nosep1 + nosep2)/2 else False
+
+            if j:
+                text = text.replace(c, joined)
+                self.dict[joined] = self.dict[joined]+1 if noj else 1
+                if invocab:
+                    if nosep1:
+                        self.dict[separated[0]] = self.dict[separated[0]] - 1
+                    if nosep2:
+                        self.dict[separated[1]] = self.dict[separated[1]] - 1
+            else:
+                text = text.replace(c, ' '.join(separated))
+                if not invocab:
+                    self.dict[separated[0]] = self.dict[separated[0]] + 1 if nosep1 else 1
+                    self.dict[separated[1]] = self.dict[separated[1]] + 1 if nosep2 else 1
         return text

@@ -1,0 +1,66 @@
+desc,regex,replace
+etc,etc,
+Striche des Rubrikators,\|\|,
+Diakritika,ů,u
+o-Umlaut,oͤ,oe
+scharfes s,ß,s
+y zu i,y,i
+j zu i,j,i
+want,(?<!\w)[uv]ant(?!\w),want
+wat,(?<!\w)[uv]at(?!\w),wat
+wie,(?<!\w)[uv]ie(?!\w),wie
+Jesus-Kürzung,(?<!\w)ihs(?!\w),jesus
+Eid,(?<!\w)eydt(?!\w),eid
+oder,(?<!\w)of(?!\w),off
+viel,(?<!\w)[vu]i[ji]?ll?(?!\w),vil
+ohne,(?<!\w)ane(?!\w),one
+kein,(?<!\w)[ijy]nt\s?gh?[ea][ijy]n(?!\w),intgein
+und,(?<!\w)(?:[ijy]n[dt]|[uv]nn?[dt]?)(?!\w),und
+es,(?<!\w)[ijy]d?t(?!\w),it
+zu,(?<!\w)t?z[ou](?=m?(?!\w)),zu
+zer-,(?<!\w)tzer(?!\w),zer
+zurzeit,"(?<!\w)t?z[ue]r\st?z[iyj]{1,2}t(?!\w)",zerzit
+davor,(?<!\w)(?:dae|da[ei]r)\s[uv][ou]r(?!\w),davur
+darum,(?<!\w)da[ie]r\s[uv]mb?(?!\w),darumb
+daraus,(?<!\w)da[ie]r\s[uv]i(?:ss?|ß)(?!\w),darus
+darauf,(?<!\w)da[ie]r\s[uv]p(?!\w),darup
+danach,(?<!\w)da[ie]r\snae?(?!\w),darna
+darin,(?<!\w)da[ie]r\s[ijy]n(?=(?:ne)?(?!\w)),darin
+damit,(?<!\w)(?:dae|da[ei]r)\sm[ijy]t(?!\w),damit
+dadurch,(?<!\w)(?:dae|da[ei]r)\sdurch(?!\w),dadurch
+dazu,(?<!\w)(?:dae|da[ei]r)\st?z[ou](?!\w),dazu
+daran,(?<!\w)(?:dae|da[ei]r)\san(?!\w),daran
+davon,(?<!\w)(?:dae|da[ei]r)\s[uv]an(?!\w),davan
+zusammen,(?<!\w)t?z[ou]\ssamm?e(?=n?(?!\w)),zusame
+wiederum,(?<!\w)w[ijy]dder\s[uv]mb?(?!\w),widderumb
+gedehntes a,ae,a
+gedehntes a,(?<!\sw)(?<!^w)ai,a
+gedehntes e,(?<!\sg)(?<!^g)(?:(?<!\s)ee|ee(?!\s)),e
+gedehntes o,oe,o
+gedehntes o,oi,o
+gedehntes o,ou(?=ch|l),o
+gedehtes u,(?<![aeiou])ui,u
+c,c(?![ihk]),k
+ch am Wortanfang,(?<!\w)ch,k
+tz am Wortanfang,(?<!\w)tz,z
+ck nach n,(?<!ra)nck(?=[^aeiou]|\s|$),g
+gh,gh,g
+oick,oick,oich
+f doppeltes,(?<!\so)ff|ff(?=\w),f
+g doppelt,gg,g
+ck,(?<!oi)(?<!n)ck|(?<=ran)ck,k
+s doppelt,ss,s
+dt,dt,t
+uirs oder virs am Wortanfang,(?<!\w)[uv]irs,ors
+vis am Wortanfang,(?<!\w)vis,uis
+ul am Wortanfang,(?<!\w)ul,vl
+u oder v vor r oder l am Wortanfang,(?<!\w)[uv](?=[rl]),v
+v vor Konsonanten,v(?=[^aeiourl]),u
+u vor Vokal aber nicht u,(?<![qo])u(?=[ao][^r])|(?<=[aeio])u(?=i)|((?<!\w)|(?<=[aei]))u(?=e[^rtd])|(?<=l)u(?=e),v
+ue vor r/t/d nach Konsonant,(?<=[^aeioulq])u(?=e[rtd]),u
+uu zwischen zwei Konsonanten,(?<=[^qaeiou])uu(?=[^aeiou]),vu
+uu vor Vokal,(?<!q)uu(?=[aeiou]),uv
+v nach q,(?<=q)v,u
+i vor anderen Vokalen am Wortanfang,(?<!\w)i(?=[aou])|(?<!\w)i(?=e(?!me(\W|$))),j
+ih am Wortanfang,(?<!\w)ih,j
+ii außerhalb von Zahlen,ii(?=[^ivxlcdm\W])|(?<=[^ivxlcdm\W])ii,i

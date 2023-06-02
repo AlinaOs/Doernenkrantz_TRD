@@ -1,0 +1,6 @@
+desc,regex,replace
+alleintsehende Buchstaben,\s(?=[a-zA-Z]\s),
+zweiter Teil,[Dd]at\s[Aa]nder\s[Dd]eill?,
+dritter Teil,[Dd]at\s[Dd]erde\s[Dd]eill?,
+dritter Teil mit Zahlen,[Dd]at\siii\s[Dd]eill?,
+erster Teil,[Dd]at\s[Ee]?irste\s[Dd]eill?,
