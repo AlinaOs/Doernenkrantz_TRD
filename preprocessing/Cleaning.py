@@ -199,12 +199,15 @@ class TextCleaner:
         """
         for c in candidates:
             j = False
-            joined = self.cleanText(str(c).replace(separator, ''))
+            joined = self.normalizeText(str(c).replace(separator, ''))
             separated = str(c).split(separator)
 
             noj = self.dict[joined] if joined in self.dict.keys() else False
             nosep1 = self.dict[separated[0]] if separated[0] in self.dict.keys() else False
             nosep2 = self.dict[separated[1]] if separated[1] in self.dict.keys() else False
+            if invocab:
+                nosep1 = nosep1 - 1 if nosep1 and nosep1 - 1 > 0 else False
+                nosep2 = nosep2 - 1 if nosep2 and nosep2 - 1 > 0 else False
 
             if joinright:
                 j = True if noj and len(separated[1]) > 3 and nosep2 < noj else False
@@ -247,12 +250,17 @@ class TextCleaner:
 
             if j:
                 text = text.replace(c, joined)
-                self.dict[joined] = self.dict[joined]+1 if noj else 1
+                self.dict[joined] = noj+1 if noj else 1
                 if invocab:
                     if nosep1:
-                        self.dict[separated[0]] = self.dict[separated[0]] - 1
+                        self.dict[separated[0]] = nosep1
+                    else:
+                        self.dict.pop(separated[0], 0)
                     if nosep2:
-                        self.dict[separated[1]] = self.dict[separated[1]] - 1
+                        self.dict[separated[1]] = nosep2
+                    else:
+                        self.dict.pop(separated[1], 0)
+
             else:
                 text = text.replace(c, ' '.join(separated))
                 if not invocab:

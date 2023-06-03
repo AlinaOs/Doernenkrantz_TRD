@@ -1,4 +1,5 @@
 import re
+from preprocessing.Cleaning import TextCleaner
 from rw.rw import *
 from nltk import ngrams
 import os.path
@@ -15,6 +16,9 @@ class TextSegmenter:
     join: Create two segments: One ignoring the insertion markers and an additional segment ignoring the insertion text.
     '''
     INSERTION = {'sentbound', 'join', 'ignore'}
+
+    def __init__(self, TC: TextCleaner):
+        self.TC = TC
 
     def segmentsToList(self, parsegments):
         locatedSegments = []
@@ -71,12 +75,13 @@ class TextSegmenter:
                 if int(pendingsent[1]) < minwords and len(parsentences) > 0:
                     last = parsentences.pop()
                     leftover = ' '.join([last[0], pendingsent[0].strip()])
+                    leftover = leftover.replace('#lb#', '').strip()
                     if pendingsent[1] > len(last[0].split()):
                         location = pendingsent[2]
                     else:
                         location = last[1]
                 else:
-                    leftover = pendingsent[0].strip()
+                    leftover = pendingsent[0].replace('#lb#', '').strip()
 
                 parsentences.append((leftover, location))
                 pendingsent = None
@@ -112,10 +117,21 @@ class TextSegmenter:
 
                 words = sent.split()
                 if pendingsent is not None:
-                    if pendingsent[0].endswith('-'):
-                        sent = pendingsent[0].strip()[0:-1] + sent
+                    if pendingsent[0].endswith('-#lb#'):
+                        # syllabification is indicated by a dash
+                        sent = pendingsent[0].strip()[0:-5] + '' + sent
+                    elif pendingsent[0].endswith('#lb#'):
+                        # the pagebreak needs checking for split up words
+                        candidatetext = pendingsent[0].strip()+sent.strip()
+                        candidate = re.search(r'\w+#lb#\w+', candidatetext)[0]
+                        candidate = self.TC.joinwords(candidate, [candidate], '#lb#', invocab=True)
+                        if candidate.find(' ') == -1:
+                            # The tokens must be joined
+                            sent = pendingsent[0].strip()+sent.strip()
+                            sent = re.sub(r'\w+#lb#\w+', candidate, sent)
                     else:
                         sent = pendingsent[0].strip() + ' ' + sent
+
                     if pendingsent[1] > len(words):
                         sentloc = pendingsent[2]
                     pendingsent = None
@@ -138,6 +154,7 @@ class TextSegmenter:
             # Check for sentences overlapping the page
             if pendingsent is None and re.search(r'#SEND#\.*$', l[0]) is None:
                 sent = parsentences.pop()[0]
+                sent = sent + '#lb#'
                 words = len(sent.split())
                 pendingsent = (sent, words, location)
 
@@ -165,7 +182,6 @@ class TextSegmenter:
                 writeToCSV(output, sentences, header=['?' for i in range(len(sentences[0]))])
 
         return sentences
-
 
     def ngramsToList(self, parngrams):
         locatedSegments = []
@@ -197,8 +213,10 @@ class TextSegmenter:
 
         for l in csv['lines']:
             if (l[1] != location[0] or l[2] != location[1]) and pendinggram is not None:
-                parNgrams.append(pendinggram)
-                pendinggram = None ##
+                gwords = list(pendinggram[0])
+                gwords[-1] = gwords[-1].replace('#lb#', '')
+                parNgrams.append((tuple(gwords),pendinggram[1]))
+                pendinggram = None
 
             n_grams.extend(self.ngramsToList(parNgrams))
             parNgrams = []
@@ -211,11 +229,22 @@ class TextSegmenter:
             words = text.split()
 
             if pendinggram is not None:
-                if pendinggram[0][-1].endswith('-'):
+                if pendinggram[0][-1].endswith('-#lb#'):
+                    # syllabification is indicated by a dash
                     gwords = list(pendinggram[0])
                     gwords[-1] = pendinggram[0][-1][:-1] + words.pop(0)
                     pendinggram = (gwords, pendinggram[1])
-                parNgrams.append((pendinggram[0], pendinggram[1])) ##
+                else:
+                    # the pagebreak needs checking for split up words
+                    candidate = pendinggram[0][-1] + words[0]
+                    candidate = self.TC.joinwords(candidate,[candidate],'#lb#',invocab=True)
+                    if candidate.find(' ') == -1:
+                        # The tokens must be joined
+                        gwords = list(pendinggram[0])
+                        gwords[-1] = candidate
+                        words.pop(0)
+                        pendinggram = (gwords, pendinggram[1])
+                parNgrams.append((pendinggram[0], pendinggram[1]))
 
                 if len(words) < n:
                     pendingwords = list(pendinggram[0])[1:] + words
@@ -232,24 +261,29 @@ class TextSegmenter:
 
             if len(words) < n:
                 if pendinggram is not None:
-                    pendinggram = None ##
+                    pendinggram = None
                     continue
                 else:
-                    pendinggram = (tuple(words), location) ##
+                    words[-1] = words[-1] + '#lb#'
+                    pendinggram = (tuple(words), location)
                     continue
             else:
-                pendinggram = None ##
+                pendinggram = None
 
             tNgrams = list(ngrams(words, n))
 
             if joinlines:
-                pendinggram = (tNgrams.pop(-1), location) ##
+                gwords = list(tNgrams.pop(-1))
+                gwords[-1] = gwords[-1] + '#lb#'
+                pendinggram = (tuple(gwords), location)
 
             for ngram in tNgrams:
                 parNgrams.append((ngram, location))
 
         if pendinggram is not None:
-            parNgrams.append(pendinggram) ##
+            gwords = list(pendinggram[0])
+            gwords[-1] = gwords[-1].replace('#lb#', '')
+            parNgrams.append((tuple(gwords), pendinggram[1]))
         n_grams.extend(self.ngramsToList(parNgrams))
         writeToCSV(output, n_grams, header=csv['header'])
 
