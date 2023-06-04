@@ -48,6 +48,12 @@ class TextExtractor:
     currGath = ''
     currGathNo = 0
 
+    def resetGathering(self):
+        currPage = 0
+        currFol = ''
+        currGath = ''
+        currGathNo = 0
+
     def getGathering(self):
         no = math.ceil(self.currGathNo / 2)
         if self.currGathNo % 2 == 0:
@@ -57,6 +63,7 @@ class TextExtractor:
         return ''.join([self.currGath, str(no), side])
 
     def extractDkText(self, xmlPath, outputPath, metaOutputPath):
+        self.resetGathering()
         metaText = []
         pagesText = []
         header = {}
@@ -182,7 +189,112 @@ class TextExtractor:
             'fol',
             'gathering'
         ])
+        writeToCSV(metaOutputPath, metaText, header=[
+            'text',
+            'bookpart',
+            'paragraph',
+            'page',
+            'fol',
+            'gathering'
+        ])
 
+    ################
+    # CRONICA
+    ################
+    def extractKChText(self, xmlPath, outputPath, metaOutputPath):
+        self.resetGathering()
+        metaText = []
+        pagesText = []
+        root = getXMLRoot(xmlPath)
+        for div in root.findall('.//tei:div', self.ns):
+            bookpart = div.attrib.get('n')
+
+            for p in div.findall('./tei:p', self.ns):
+                paragraph = p.attrib.get('n')
+                pageLines = []
+                for elem in p.findall('./*'):
+
+                    if elem.tag == self.tei + 'l':
+                        test = 0
+                        if elem.find('./tei:fw[@type = "header"]', self.ns) is not None:
+                            # Extract page headers from xml
+                            head = elem.find('./tei:fw', self.ns)
+                            h = self.joinLines([head])
+
+                            metaText.append([
+                                h,
+                                bookpart,
+                                paragraph,
+                                self.currPage,
+                                self.currFol,
+                                self.getGathering()
+                            ])
+
+                        else:
+                            # Extract main text from xml
+                            pageLines.append(elem)
+
+                    elif elem.tag == self.tei + 'pb':
+                        # Change page, save page text
+                        if pageLines:
+                            joined = self.joinLines(pageLines)
+                            if joined != '':
+                                # re-add syllabification marker if a word is broken over two pages
+                                li = -1
+                                if len(pageLines[-1].findall('./' + self.tei + 'fw[@type="sig"]')) > 0:
+                                    li = -2
+                                if len(pageLines[li].findall('./' + self.tei + 'pc[@type="syllabification"]')) > 0:
+                                    joined += '-'
+
+                                pagesText.append([
+                                    joined,
+                                    bookpart,
+                                    paragraph,
+                                    self.currPage,
+                                    self.currFol,
+                                    self.getGathering()
+                                ])
+                            pageLines.clear()
+
+                        self.currFol = elem.attrib.get('n')
+                        self.currPage += 1
+                        self.currGathNo += 1
+                        continue
+
+                    elif elem.tag == self.tei + 'gb':
+                        self.currGath = elem.attrib.get('n')
+                        self.currGathNo = 0
+                        continue
+
+                # Join page text
+                if pageLines:
+                    joined = self.joinLines(pageLines)
+                    if joined != '':
+                        # re-add syllabification marker if a word is broken over two pages
+                        li = -1
+                        if len(pageLines[-1].findall('./' + self.tei + 'fw[@type="sig"]')) > 0:
+                            li = -2
+                        if len(pageLines[li].findall('./' + self.tei + 'pc[@type="syllabification"]')) > 0:
+                            joined += '-'
+
+                        pagesText.append([
+                            joined,
+                            bookpart,
+                            paragraph,
+                            self.currPage,
+                            self.currFol,
+                            self.getGathering()
+                        ])
+                    pageLines.clear()
+
+        writeToCSV(outputPath, pagesText, header=[
+            'text',
+            'bookpart',
+            'paragraph',
+            'page',
+            'fol',
+            'gathering'
+        ])
         writeToCSV(metaOutputPath, metaText, header=[
             'text',
             'bookpart',
