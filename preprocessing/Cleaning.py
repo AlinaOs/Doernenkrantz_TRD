@@ -26,11 +26,18 @@ class TextCleaner:
         csv = readFromCSV(input)
         if addnorm is not None:
             addnorm = readDictFromCSV(addnorm)
-        for l in csv['lines']:
+        delete = []
+        for i in range(len(csv['lines'])):
+            l = csv['lines'][i]
             l[0] = self.cleanText(l[0], normalize, addnorm)
             l[0] = self.joinlineends(l[0])
             if normalize:
                 l[0] = self.joinprefixes(l[0])
+                l[0] = l[0].strip()
+            if l[0] == '':
+                delete.append(i)
+        for i in sorted(delete, reverse=True):
+            csv['lines'].pop(i)
         writeToCSV(output, csv['lines'], header=csv['header'])
 
     def cleanText(self, text: str, normalize=True, addnorm=None):
@@ -127,6 +134,7 @@ class TextCleaner:
 
     def updatedict(self, text):
         text = re.sub(r'\w+#lb#\w+', '', text)
+        text = re.sub(r'\w+#lb#$', '', text)
         text = re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ', text)
         tokens = text.split()
         for token in tokens:
@@ -160,9 +168,19 @@ class TextCleaner:
         :param text: The input text, where linebreaks are marked as '#lb#'.
         :return: The text with all linebreaks either removed or replaced by a whitespace.
         """
+        text = re.sub(r'(?<=#SEND#)#lb#|#lb#(?=#SEND#)', ' ', text)
+        text = re.sub(r'(?<=#CSTART#)#lb#|#lb#(?=#CSTART#)', ' ', text)
+        text = re.sub(r'(?<=#INEND#)#lb#|#lb#(?=#INEND#)', ' ', text)
+        text = re.sub(r'(?<=#INSTART#)#lb#|#lb#(?=#INSTART#)', ' ', text)
+        text = re.sub(r'\s#lb#$', '#lb#', text)
+        text = re.sub(r'^#lb#\s?', '', text)
+        text = re.sub(r'(?<=\s)#lb#|#lb#(?=\s)', ' ', text)
         candidates = re.findall(r'\w+#lb#\w+', text)
         text = self.joinwords(text, candidates, '#lb#')
-        text = text.replace('#lb#', ' ')
+        if re.search(r'\w+#lb#\w+', text):
+            # There exists a line that consists only of one word. this word is therefore encased in
+            # linebreaks and the second linebreak still needs to be checked.
+            text = self.joinlineends(text)
         text = re.sub(r'\s+', ' ', text)
         return text
 
@@ -200,7 +218,14 @@ class TextCleaner:
         for c in candidates:
             j = False
             joined = self.normalizeText(str(c).replace(separator, ''))
-            separated = str(c).split(separator)
+            separated = self.normalizeText(str(c).replace(separator, ' '))
+            separated = separated.split()
+
+            if len(separated) == 1:
+                # During normalization, the separated words get joined.
+                # -> The candidate pair would be joined anyway.
+                j = True
+                separated = str(c).split(separator)
 
             noj = self.dict[joined] if joined in self.dict.keys() else False
             nosep1 = self.dict[separated[0]] if separated[0] in self.dict.keys() else False
@@ -209,44 +234,47 @@ class TextCleaner:
                 nosep1 = nosep1 - 1 if nosep1 and nosep1 - 1 > 0 else False
                 nosep2 = nosep2 - 1 if nosep2 and nosep2 - 1 > 0 else False
 
-            if joinright:
-                j = True if noj and len(separated[1]) > 3 and nosep2 < noj else False
-            else:
-                if not noj and not nosep1 and not nosep2:
-                    # 1
-                    j = False
-                elif noj and not nosep1 and not nosep2:
-                    # 2
-                    j = True
-                elif not noj and nosep1 and nosep2:
-                    # 6
-                    j = False
-                elif noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
-                    # 4
-                    septext = separated[0] if nosep1 else separated[1]
-                    lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
-                    if lg[0] == 'la' and lg[1] > 0.8:
+            if not j:
+                # Even after normalization, the separated words would still be separated. Decide, whether to join
+                # or not to join.
+                if joinright:
+                    j = True if noj and len(separated[1]) > 3 and nosep2 < noj else False
+                else:
+                    if not noj and not nosep1 and not nosep2:
+                        # 1
                         j = False
-                    else:
-                        sep = nosep1 if nosep1 else nosep2
-                        j = True if noj > sep else False
-                elif not noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
-                    # 3
-                    septext = separated[0] if nosep1 else separated[1]
-                    lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
-                    if lg[0] == 'la' and lg[1] > 0.8:
+                    elif noj and not nosep1 and not nosep2:
+                        # 2
+                        j = True
+                    elif not noj and nosep1 and nosep2:
+                        # 6
                         j = False
-                    else:
-                        sep = separated[0] if nosep2 else separated[1]
-                        j = True if len(sep) <= 3 else False
-                elif noj and nosep1 and nosep2:
-                    # 5
-                    lg1 = self.lidentifier.classify(' '.join([separated[0] for i in range(6)]))
-                    lg2 = self.lidentifier.classify(' '.join([separated[1] for i in range(6)]))
-                    if (lg1[0] == 'la' and lg1[1] > 0.8) or (lg2[0] == 'la' and lg2[1] > 0.8):
-                        j = False
-                    else:
-                        j = True if noj > (nosep1 + nosep2)/2 else False
+                    elif noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
+                        # 4
+                        septext = separated[0] if nosep1 else separated[1]
+                        lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
+                        if lg[0] == 'la' and lg[1] > 0.8:
+                            j = False
+                        else:
+                            sep = nosep1 if nosep1 else nosep2
+                            j = True if noj > sep else False
+                    elif not noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
+                        # 3
+                        septext = separated[0] if nosep1 else separated[1]
+                        lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
+                        if lg[0] == 'la' and lg[1] > 0.8:
+                            j = False
+                        else:
+                            sep = separated[0] if nosep2 else separated[1]
+                            j = True if len(sep) <= 3 else False
+                    elif noj and nosep1 and nosep2:
+                        # 5
+                        lg1 = self.lidentifier.classify(' '.join([separated[0] for i in range(6)]))
+                        lg2 = self.lidentifier.classify(' '.join([separated[1] for i in range(6)]))
+                        if (lg1[0] == 'la' and lg1[1] > 0.8) or (lg2[0] == 'la' and lg2[1] > 0.8):
+                            j = False
+                        else:
+                            j = True if noj > (nosep1 + nosep2)/2 else False
 
             if j:
                 text = text.replace(c, joined)

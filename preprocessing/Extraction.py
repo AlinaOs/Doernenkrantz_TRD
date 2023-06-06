@@ -35,7 +35,7 @@ class TextExtractor:
                         li += elem.tail
             li = ''.join(li.splitlines())
             if li != '':
-                li += joiner
+                li = li.strip() + joiner
                 cleanLines.append(li)
         return ''.join(cleanLines)
 

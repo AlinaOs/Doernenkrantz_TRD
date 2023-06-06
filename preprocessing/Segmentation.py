@@ -117,14 +117,14 @@ class TextSegmenter:
 
                 words = sent.split()
                 if pendingsent is not None:
-                    if pendingsent[0].endswith('-#lb#'):
+                    if pendingsent[0].endswith('-'):
                         # syllabification is indicated by a dash
                         sent = pendingsent[0].strip()[0:-5] + '' + sent
                     elif pendingsent[0].endswith('#lb#'):
                         # the pagebreak needs checking for split up words
                         candidatetext = pendingsent[0].strip()+sent.strip()
-                        candidate = re.search(r'\w+#lb#\w+', candidatetext)[0]
-                        candidate = self.TC.joinwords(candidate, [candidate], '#lb#', invocab=True)
+                        candidate = re.search(r'\w+#lb#\w+', candidatetext)
+                        candidate = self.TC.joinwords(candidate[0], [candidate[0]], '#lb#')
                         if candidate.find(' ') == -1:
                             # The tokens must be joined
                             sent = pendingsent[0].strip()+sent.strip()
@@ -154,7 +154,7 @@ class TextSegmenter:
             # Check for sentences overlapping the page
             if pendingsent is None and re.search(r'#SEND#\.*$', l[0]) is None:
                 sent = parsentences.pop()[0]
-                sent = sent + '#lb#'
+                # sent = sent + '#lb#'
                 words = len(sent.split())
                 pendingsent = (sent, words, location)
 
@@ -229,21 +229,23 @@ class TextSegmenter:
             words = text.split()
 
             if pendinggram is not None:
-                if pendinggram[0][-1].endswith('-#lb#'):
+                if pendinggram[0][-1].endswith('-'):
                     # syllabification is indicated by a dash
                     gwords = list(pendinggram[0])
                     gwords[-1] = pendinggram[0][-1][:-1] + words.pop(0)
                     pendinggram = (gwords, pendinggram[1])
-                else:
+                elif pendinggram[0][-1].endswith('#lb#'):
                     # the pagebreak needs checking for split up words
                     candidate = pendinggram[0][-1] + words[0]
-                    candidate = self.TC.joinwords(candidate,[candidate],'#lb#',invocab=True)
+                    candidate = self.TC.joinwords(candidate, [candidate], '#lb#')
+                    gwords = list(pendinggram[0])
                     if candidate.find(' ') == -1:
                         # The tokens must be joined
-                        gwords = list(pendinggram[0])
                         gwords[-1] = candidate
                         words.pop(0)
-                        pendinggram = (gwords, pendinggram[1])
+                    else:
+                        gwords[-1] = gwords[-1].replace('#lb#', '')
+                    pendinggram = (gwords, pendinggram[1])
                 parNgrams.append((pendinggram[0], pendinggram[1]))
 
                 if len(words) < n:
@@ -264,7 +266,6 @@ class TextSegmenter:
                     pendinggram = None
                     continue
                 else:
-                    words[-1] = words[-1] + '#lb#'
                     pendinggram = (tuple(words), location)
                     continue
             else:
@@ -274,7 +275,6 @@ class TextSegmenter:
 
             if joinlines:
                 gwords = list(tNgrams.pop(-1))
-                gwords[-1] = gwords[-1] + '#lb#'
                 pendinggram = (tuple(gwords), location)
 
             for ngram in tNgrams:
@@ -282,7 +282,6 @@ class TextSegmenter:
 
         if pendinggram is not None:
             gwords = list(pendinggram[0])
-            gwords[-1] = gwords[-1].replace('#lb#', '')
             parNgrams.append((tuple(gwords), pendinggram[1]))
         n_grams.extend(self.ngramsToList(parNgrams))
         writeToCSV(output, n_grams, header=csv['header'])

@@ -1,4 +1,4 @@
 desc,regex,replace
-O als Ausruf,(?:\s|^)O(?=\s),#SEND#
-Och als Ausruf,(?:\s|^)Och(?=\s),#SEND#
+O als Ausruf,(?:\s|^)O(?=\s),.
+Och als Ausruf,(?:\s|^)Och(?=\s),.
 Ja als Ausruf,(?<!\w)[JIji]a(?=\s),
