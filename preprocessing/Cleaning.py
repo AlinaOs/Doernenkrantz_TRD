@@ -1,30 +1,32 @@
 import re
-from rw.rw import *
+from tools.rw import *
+from tools.lang import Dictionary
 from py3langid.langid import LanguageIdentifier, MODEL_FILE
 
 
 class TextCleaner:
-    vocabulary = {}
     lidentifier = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
     lidentifier.set_languages(['la', 'de'])
     standardCSnorm = []
     standardLCnorm = []
     prefixes = []
 
-    def __init__(self, standardCSnorm, standardLCnorm, prefixes, vocab = None):
+    def __init__(self, standardCSnorm, standardLCnorm, prefixes, vocab=None):
         """
         Initializes and returns a TextCleaner.
 
         :param standardCSnorm: Path to CSV file containing normalization rules that are case-sensitive.
         :param standardLCnorm: Path to CSV file containing normalization rules that are case-insensitive (lowercase).
         :param prefixes: Path to CSV file containing a list of prefixes that should be checked for word-joining.
-        :param vocab: Optional path for the initiation of a vocabulary.
+        :param vocab: Optional path or Dictionary object for the initiation of a vocabulary.
         """
         self.standardCSnorm = readDictFromCSV(standardCSnorm) if standardCSnorm is not None else []
         self.standardLCnorm = readDictFromCSV(standardLCnorm) if standardLCnorm is not None else []
         self.prefixes = readDictFromCSV(prefixes) if prefixes is not None else []
-        if vocab is not None:
-            self.vocabulary = readDictFromJson(vocab)
+        if isinstance(vocab, Dictionary):
+            self.vocab = vocab
+        else:
+            self.vocab = Dictionary(vocab)
 
     def cleanTextFromCSV(self, input, output, normalize=True, lowercase=False, addnorm=None):
         csv = readFromCSV(input)
@@ -120,7 +122,11 @@ class TextCleaner:
 
         # normalize whitespace (no trimming)
         text = re.sub(r'\s+', ' ', text)
-        self.updatedict(text)
+        self.vocab.updateDict(
+            re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ',
+                   re.sub(r'\w+#lb#$', '',
+                          re.sub(r'\w+#lb#\w+', '', text)))
+        )
 
         return text
 
@@ -137,21 +143,6 @@ class TextCleaner:
             text = re.sub(rule['regex'], rule['replace'], text)
 
         return text
-
-    def updatedict(self, text):
-        text = re.sub(r'\w+#lb#\w+', '', text)
-        text = re.sub(r'\w+#lb#$', '', text)
-        text = re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ', text)
-        tokens = text.split()
-        for token in tokens:
-            token = token.lower()
-            if token in self.vocabulary.keys():
-                self.vocabulary[token] = self.vocabulary[token] + 1
-            else:
-                self.vocabulary[token] = 1
-
-    def serializedict(self, output):
-        saveDictAsJson(output, self.vocabulary)
 
     def joinprefixes(self, text):
         """
@@ -234,9 +225,10 @@ class TextCleaner:
                 j = True
                 separated = str(c).split(separator)
 
-            noj = self.vocabulary[joined.lower()] if joined.lower() in self.vocabulary.keys() else False
-            nosep1 = self.vocabulary[separated[0].lower()] if separated[0].lower() in self.vocabulary.keys() else False
-            nosep2 = self.vocabulary[separated[1].lower()] if separated[1].lower() in self.vocabulary.keys() else False
+            noj = self.vocab.getWordFrequency(joined.lower())
+            nosep1 = self.vocab.getWordFrequency(separated[0].lower())
+            nosep2 = self.vocab.getWordFrequency(separated[1].lower())
+
             if invocab:
                 nosep1 = nosep1 - 1 if nosep1 and nosep1 - 1 > 0 else False
                 nosep2 = nosep2 - 1 if nosep2 and nosep2 - 1 > 0 else False
@@ -285,20 +277,14 @@ class TextCleaner:
 
             if j:
                 text = text.replace(c, joined)
-                self.vocabulary[joined.lower()] = noj + 1 if noj else 1
+                self.vocab.addWord(joined.lower())
                 if invocab:
-                    if nosep1:
-                        self.vocabulary[separated[0].lower()] = nosep1
-                    else:
-                        self.vocabulary.pop(separated[0].lower(), 0)
-                    if nosep2:
-                        self.vocabulary[separated[1].lower()] = nosep2
-                    else:
-                        self.vocabulary.pop(separated[1].lower(), 0)
+                    self.vocab.removeWord(nosep1)
+                    self.vocab.removeWord(nosep2)
 
             else:
                 text = text.replace(c, ' '.join(separated))
                 if not invocab:
-                    self.vocabulary[separated[0].lower()] = self.vocabulary[separated[0].lower()] + 1 if nosep1 else 1
-                    self.vocabulary[separated[1].lower()] = self.vocabulary[separated[1].lower()] + 1 if nosep2 else 1
+                    self.vocab.addWord(separated[0].lower())
+                    self.vocab.addWord(separated[1].lower())
         return text

@@ -1,6 +1,6 @@
 import re
 from preprocessing.Cleaning import TextCleaner
-from rw.rw import *
+from tools.rw import *
 from nltk import ngrams
 import os.path
 

@@ -1,5 +1,5 @@
 import math
-from rw.rw import *
+from tools.rw import *
 
 
 class TextExtractor:
