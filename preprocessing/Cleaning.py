@@ -4,25 +4,29 @@ from py3langid.langid import LanguageIdentifier, MODEL_FILE
 
 
 class TextCleaner:
-    dict = {}
+    vocabulary = {}
     lidentifier = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
     lidentifier.set_languages(['la', 'de'])
     standardCSnorm = []
     standardLCnorm = []
     prefixes = []
 
-    def __init__(self, standardCSnorm, standardLCnorm, prefixes):
+    def __init__(self, standardCSnorm, standardLCnorm, prefixes, vocab = None):
         """
         Initializes and returns a TextCleaner.
 
         :param standardCSnorm: Path to CSV file containing normalization rules that are case-sensitive.
         :param standardLCnorm: Path to CSV file containing normalization rules that are case-insensitive (lowercase).
+        :param prefixes: Path to CSV file containing a list of prefixes that should be checked for word-joining.
+        :param vocab: Optional path for the initiation of a vocabulary.
         """
-        self.standardCSnorm = readDictFromCSV(standardCSnorm)
-        self.standardLCnorm = readDictFromCSV(standardLCnorm)
-        self.prefixes = readDictFromCSV(prefixes)
+        self.standardCSnorm = readDictFromCSV(standardCSnorm) if standardCSnorm is not None else []
+        self.standardLCnorm = readDictFromCSV(standardLCnorm) if standardLCnorm is not None else []
+        self.prefixes = readDictFromCSV(prefixes) if prefixes is not None else []
+        if vocab is not None:
+            self.vocabulary = readDictFromJson(vocab)
 
-    def cleanTextFromCSV(self, input, output, normalize=True, addnorm=None):
+    def cleanTextFromCSV(self, input, output, normalize=True, lowercase=False, addnorm=None):
         csv = readFromCSV(input)
         if addnorm is not None:
             addnorm = readDictFromCSV(addnorm)
@@ -40,7 +44,7 @@ class TextCleaner:
             csv['lines'].pop(i)
         writeToCSV(output, csv['lines'], header=csv['header'])
 
-    def cleanText(self, text: str, normalize=True, addnorm=None):
+    def cleanText(self, text: str, normalize=True, lowercase=False, addnorm=None):
         """
         Cleans the given text by dealing with punctuation, whitespaces and case. If normalize is set to True (default),
         standard normalization will be performed based on the normalization rules that were initiated with the
@@ -92,6 +96,8 @@ class TextCleaner:
 
         if normalize:
             text = self.normalizeText(text)
+        elif lowercase:
+            text = text.lower()
 
         # apply individual normalizations given as function parameter
         if addnorm is not None:
@@ -138,10 +144,14 @@ class TextCleaner:
         text = re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ', text)
         tokens = text.split()
         for token in tokens:
-            if token in self.dict.keys():
-                self.dict[token] = self.dict[token]+1
+            token = token.lower()
+            if token in self.vocabulary.keys():
+                self.vocabulary[token] = self.vocabulary[token] + 1
             else:
-                self.dict[token] = 1
+                self.vocabulary[token] = 1
+
+    def serializedict(self, output):
+        saveDictAsJson(output, self.vocabulary)
 
     def joinprefixes(self, text):
         """
@@ -168,10 +178,7 @@ class TextCleaner:
         :param text: The input text, where linebreaks are marked as '#lb#'.
         :return: The text with all linebreaks either removed or replaced by a whitespace.
         """
-        text = re.sub(r'(?<=#SEND#)#lb#|#lb#(?=#SEND#)', ' ', text)
-        text = re.sub(r'(?<=#CSTART#)#lb#|#lb#(?=#CSTART#)', ' ', text)
-        text = re.sub(r'(?<=#INEND#)#lb#|#lb#(?=#INEND#)', ' ', text)
-        text = re.sub(r'(?<=#INSTART#)#lb#|#lb#(?=#INSTART#)', ' ', text)
+        text = re.sub(r'(?<=\W)#lb#|#lb#(?=\W)', ' ', text)
         text = re.sub(r'\s#lb#$', '#lb#', text)
         text = re.sub(r'^#lb#\s?', '', text)
         text = re.sub(r'(?<=\s)#lb#|#lb#(?=\s)', ' ', text)
@@ -227,9 +234,9 @@ class TextCleaner:
                 j = True
                 separated = str(c).split(separator)
 
-            noj = self.dict[joined] if joined in self.dict.keys() else False
-            nosep1 = self.dict[separated[0]] if separated[0] in self.dict.keys() else False
-            nosep2 = self.dict[separated[1]] if separated[1] in self.dict.keys() else False
+            noj = self.vocabulary[joined.lower()] if joined.lower() in self.vocabulary.keys() else False
+            nosep1 = self.vocabulary[separated[0].lower()] if separated[0].lower() in self.vocabulary.keys() else False
+            nosep2 = self.vocabulary[separated[1].lower()] if separated[1].lower() in self.vocabulary.keys() else False
             if invocab:
                 nosep1 = nosep1 - 1 if nosep1 and nosep1 - 1 > 0 else False
                 nosep2 = nosep2 - 1 if nosep2 and nosep2 - 1 > 0 else False
@@ -278,20 +285,20 @@ class TextCleaner:
 
             if j:
                 text = text.replace(c, joined)
-                self.dict[joined] = noj+1 if noj else 1
+                self.vocabulary[joined.lower()] = noj + 1 if noj else 1
                 if invocab:
                     if nosep1:
-                        self.dict[separated[0]] = nosep1
+                        self.vocabulary[separated[0].lower()] = nosep1
                     else:
-                        self.dict.pop(separated[0], 0)
+                        self.vocabulary.pop(separated[0].lower(), 0)
                     if nosep2:
-                        self.dict[separated[1]] = nosep2
+                        self.vocabulary[separated[1].lower()] = nosep2
                     else:
-                        self.dict.pop(separated[1], 0)
+                        self.vocabulary.pop(separated[1].lower(), 0)
 
             else:
                 text = text.replace(c, ' '.join(separated))
                 if not invocab:
-                    self.dict[separated[0]] = self.dict[separated[0]] + 1 if nosep1 else 1
-                    self.dict[separated[1]] = self.dict[separated[1]] + 1 if nosep2 else 1
+                    self.vocabulary[separated[0].lower()] = self.vocabulary[separated[0].lower()] + 1 if nosep1 else 1
+                    self.vocabulary[separated[1].lower()] = self.vocabulary[separated[1].lower()] + 1 if nosep2 else 1
         return text

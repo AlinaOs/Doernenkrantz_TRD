@@ -39,3 +39,30 @@ def readDictFromCSV(path):
             lines.append(row)
 
     return lines
+
+
+def saveDictAsJson(output, dict):
+    with open(output, 'w', newline='', encoding='utf-8') as fp:
+        json.dump(dict, fp)
+
+
+def readDictFromJson(path):
+    with open(path, 'r', newline='', encoding='utf-8') as fp:
+        dict = json.load(fp)
+    return dict
+
+
+def writeTextToFile(path, text):
+    with open(path, 'w', newline='', encoding='utf-8') as txtfile:
+        txtfile.write(text)
+
+
+def appendTextToFile(path, text):
+    with open(path, 'a', newline='', encoding='utf-8') as txtfile:
+        txtfile.write(text)
+
+
+def readFromTxt(path):
+    with open(path, 'r', newline='', encoding='utf-8') as txtfile:
+        txt = txtfile.read()
+    return txt.strip()

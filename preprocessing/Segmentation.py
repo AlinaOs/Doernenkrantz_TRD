@@ -287,3 +287,43 @@ class TextSegmenter:
         writeToCSV(output, n_grams, header=csv['header'])
 
         #TODO insertion for Ngrams?
+
+    def getFullText(self, innput, outputfolder, title):
+        csv = readFromCSV(innput)
+
+        fulltext = ''
+        pages = {}
+        parts = {}
+        currentIndex = -1
+        currParaStart = 0
+        currPara = '0'
+        currPageStart = 0
+        currPage = 0
+
+        for l in csv['lines']:
+            if int(l[3]) > currPage:
+                pages[str(currPage)] = (currPageStart, currentIndex)
+                currPage = int(l[3])
+                currPageStart = currentIndex + 1
+            if l[2] != currPara:
+                parts[currPara] = (currParaStart, currentIndex)
+                currPara = l[2]
+                currParaStart = currentIndex + 1
+
+            text = l[0].strip()
+            if text == '':
+                continue
+            text = re.sub(r'\s*(?:#SEND#|#CSTART#|#INSTART#|#INEND#)\s*', ' ', text)
+            text = re.sub(r'\s+', ' ', text)
+            text = text.strip()
+            fulltext += text
+
+            currentIndex += len(text)
+
+        fulltext = fulltext.replace('-', '')
+        fulltext = self.TC.joinlineends(fulltext)
+        fulltext = fulltext.strip()
+        pages.pop('0')
+        parts.pop('0')
+        saveDictAsJson(outputfolder + os.sep + title + '_index.json', {'parts': parts, 'pages': pages})
+        writeTextToFile(outputfolder + os.sep + title + '_fulltext.txt', fulltext)
