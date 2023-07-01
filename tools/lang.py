@@ -1,6 +1,6 @@
-import re
-
-from tools.rw import readDictFromJson, saveDictAsJson
+import string
+import numpy as np
+from tools.rw import readDictFromJson, saveDictAsJson, readFromCSV
 
 
 class Dictionary:
@@ -141,3 +141,162 @@ class Dictionary:
 
         self.words.pop(ind)
         self.freqs.pop(ind)
+
+
+class ScoringMatrix:
+
+    def __init__(self, init, name):
+        if init is not None and isinstance(init, str):
+            self.SM = np.asarray(readFromCSV(init, False))
+        elif init is not None and isinstance(init, list):
+            self.SM = np.asarray(init)
+        else:
+            self.SM = np.full((26, 26), -1)
+            for i in range(26):
+                self.SM[i, i] = 1
+
+        self.name = name
+
+        pos = np.copy(self.SM)
+        pos[pos < 0] = 1
+        self.am = np.average(pos)
+
+    def __getitem__(self, item: tuple[str, str]):
+        i =  string.ascii_lowercase.index(item[0])
+        j = string.ascii_lowercase.index(item[1])
+        return self.SM[i,j]
+
+    def name(self):
+        return self.name
+
+    def identify(self, name):
+        return True if self.name == name else False
+
+    def averagematch(self):
+        return self.am
+
+
+class StringSimilarity():
+
+    SM = {
+        'standard': ScoringMatrix(None, 'standard')
+    }
+
+    def registerSM(self, SM: ScoringMatrix):
+        self.SM[SM.name()] = SM
+
+    # The code for the newu() function was originally copied from the Needleman-Wunsch implementation at
+    # https://gist.github.com/slowkow/06c6dba9180d013dfd82bec217d22eb5.
+    # It was broadly restructured and adapted to include a custom scoring matrix and a variable gap penalty. Also, the
+    # function was changed to return a result containing different types of information instead of aligned strings.
+    def newu(self, x, y, SM:str=None, gapstart=0.5, gapex=1):
+        if SM is not None and SM not in self.SM.keys():
+            return None
+
+        F, P = self.__nwmatrix(x, y, SM, gapstart, gapex)
+
+        # Trace through an optimal alignment.
+        i = len(x)
+        j = len(y)
+        rx = []
+        ry = []
+
+        while i > 0 and j > 0:
+            if P[i, j] == 'diag':
+                rx.append(x[i - 1])
+                ry.append(y[j - 1])
+                i -= 1
+                j -= 1
+            elif P[i, j] == 'left':
+                rx.append('-')
+                ry.append(y[j-1])
+                j -= 1
+            elif P[i, j] == 'top':
+                rx.append(x[i-1])
+                ry.append('-')
+                i -= 1
+
+        if i > 0:
+            ry = ry + list(np.full(i, '-'))
+            while i > 0:
+                rx.append(x[i-1])
+                i -= 1
+        else:
+            rx = rx + list(np.full(j, '-'))
+            while j > 0:
+                ry.append(y[j-1])
+                j -= 1
+        
+        # Reverse the strings.
+        rx = ''.join(rx)[::-1]
+        ry = ''.join(ry)[::-1]
+
+        am = self.SM['standard'].averagematch() if SM is None else self.SM[SM].averagematch()
+
+        result = {
+            'sim': F[len(x), len(y)],
+            'normsim': self.__nwnorm(x, y, F[len(x), len(y)], gapstart, gapex, am),
+            'alignx': rx,
+            'aligny': ry,
+            'config': {'gapstart': gapstart, 'gapex': gapex, 'sm': 'standard'}
+        }
+        return result
+
+    def __nwmatrix(self, x, y, SM:str=None, gapstart=0.5, gapex=1):
+        if SM is None:
+            SM = self.SM['standard']
+        else:
+            SM = self.SM[SM]
+
+        nx = len(x)
+        ny = len(y)
+
+        # Optimal score at each possible pair of characters.
+        F = np.zeros((nx + 1, ny + 1))
+        F[:, 0] = np.asarray([0.0] + [-gapstart - i * gapex for i in range(nx)])
+        F[0, :] = np.asarray([0.0] + [-gapstart - i * gapex for i in range(ny)])
+
+        # Pointers to trace through an optimal alignment.
+        P = np.full((nx + 1, ny + 1), 'none')
+        P[:, 0] = 'left'
+        P[0, :] = 'up'
+
+        # Temporary scores.
+        t = np.zeros(3)
+        for i in range(1, nx + 1):
+            for j in range(1, ny + 1):
+                t[0] = F[i - 1, j - 1] + SM[x[i - 1], y[j - 1]]
+                t[1] = F[i, j - 1] - gapstart if P[i, j - 1] == 2 else F[i, j - 1] - gapex
+                t[2] = F[i - 1, j] - gapstart if P[i - 1, j] == 2 else F[i - 1, j] - gapex
+
+                tmax = np.max(t)
+                F[i, j] = tmax
+
+                if t[0] == tmax:
+                    P[i, j] = 'diag'
+                if t[1] == tmax:
+                    P[i, j] = 'left'
+                if t[2] == tmax:
+                    P[i, j] = 'top'
+
+        return F, P
+
+    def __nwnorm(self, x, y, nwscore, gapstart=0.5, gapex=1, averagematch=1):
+        hs = np.min([len(x), len(y)]) * averagematch
+        rest = abs(len(x) - len(y))
+
+        if rest > 0:
+            hs -= gapstart
+            rest -= 1
+            for r in range(rest):
+                hs -= gapex
+
+        return nwscore / hs
+
+    def commonStemma(self, x, y) -> str:
+        # Todo: Return the common stemma of x and y
+        pass
+
+    def stemma(self, stem, word) -> bool:
+        # Todo: Check, whether the stem may be the stemma of the given word
+        pass
