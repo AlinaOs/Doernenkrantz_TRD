@@ -41,6 +41,35 @@ class TextCleaner:
                 delete.append(i)
         for i in sorted(delete, reverse=True):
             csv['lines'].pop(i)
+            
+        # Join words hyphenated over two pages
+        brokenword = False
+        for i in range(len(csv['lines'])):
+            if brokenword:
+                tokens = csv['lines'][i][0].split()
+                csv['lines'][i - 1][0] = ''.join([csv['lines'][i - 1][0], tokens[0]])
+                self.vocab.removeWord(
+                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
+                    re.sub(r'\w+#lb#$', '',
+                          re.sub(r'\w+#lb#\w+', '', tokens[0]))), docid)
+                tokens.pop(0)
+                csv['lines'][i][0] = ' '.join(tokens)
+                lasttokens = csv['lines'][i - 1][0].split()
+                lasttokens[-1] = self.cleanText(lasttokens[-1], normalize, lowercase, addnorm, docid)
+                self.vocab.addWord(
+                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
+                           re.sub(r'\w+#lb#$', '',
+                                  re.sub(r'\w+#lb#\w+', '', lasttokens[-1]))), docid)
+                brokenword = False
+            if csv['lines'][i][0].strip().endswith('-'):
+                brokenword = True
+                tokens = csv['lines'][i][0].split()
+                self.vocab.removeWord(
+                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
+                    re.sub(r'\w+#lb#$', '',
+                          re.sub(r'\w+#lb#\w+', '', tokens[-1]))), docid)
+                csv['lines'][i][0] = csv['lines'][i][0].replace('-', '')
+
         writeToCSV(output, csv['lines'], header=csv['header'])
 
     def cleanText(self, text: str, normalize=True, lowercase=False, addnorm=None, docid=None):

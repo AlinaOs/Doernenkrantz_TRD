@@ -1,12 +1,12 @@
 import math
 import re
 import xml.etree.ElementTree as ET
-from rw.rw import readDictFromCSV
+from tools.rw import readDictFromCSV
 
-
-ocrfilepath = '../fulltexts/KCh_complete_2023-06-04_tei.xml'
-preparedfilepath = '../fulltexts/KCh-completeTest-prepared.xml'
-improvedfilepath = '../fulltexts/KCh-completeTest-improved.xml'
+# ocrfilepath = '../fulltexts/KCh_complete_2023-06-04_tei.xml'
+ocrfilepath = '../fulltexts/KCh_complete_2023-07-21_tei.xml'
+preparedfilepath = '../fulltexts/KCh-completeTest-prepared_Layout.xml'
+improvedfilepath = '../fulltexts/KCh-complete_Layout.xml'
 
 
 def prepareXML():
@@ -49,12 +49,40 @@ def prepareXML():
 tei = '{http://www.tei-c.org/ns/1.0}'
 xmlns = '{http://www.w3.org/XML/1998/namespace}'
 ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
+import string
+gatherings = []
+gformula = [{'start': 0, 'end': 8, 'lower': False, 'len': 6, 'double': False},
+            {'start': 10, 'end': 10, 'lower': False, 'len': 10, 'double': False},
+            {'start': 11, 'end': 19, 'lower': False, 'len': 6, 'double': False},
+            {'start': 21, 'end': 21, 'lower': True, 'len': 6, 'double': False},
+            {'start': 23, 'end': 25, 'lower': True, 'len': 6, 'double': False},
+            {'start': 0, 'end': 3, 'lower': True, 'len': 6, 'double': False},
+            {'start': 4, 'end': 4, 'lower': True, 'len': 4, 'double': False},
+            {'start': 5, 'end': 8, 'lower': True, 'len': 6, 'double': False},
+            {'start': 10, 'end': 19, 'lower': True, 'len': 6, 'double': False},
+            {'start': 21, 'end': 21, 'lower': True, 'len': 6, 'double': False},
+            {'start': 23, 'end': 25, 'lower': True, 'len': 6, 'double': False},
+            {'start': 0, 'end': 8, 'lower': True, 'len': 6, 'double': True},
+            {'start': 10, 'end': 13, 'lower': True, 'len': 6, 'double': True}]
+
+
+def fillGatherings():
+    for formula in gformula:
+        if formula['lower']:
+            chars = string.ascii_lowercase
+        else:
+            chars = string.ascii_uppercase
+        for i in range(formula['start'], formula['end'] + 1):
+            g = chars[i]
+            if formula['double']:
+                g = g + g
+            gatherings.append((g, formula['len']))
 
 
 def improveXML():
     pageno = 0
+    fillGatherings()
     ET.register_namespace('', "http://www.tei-c.org/ns/1.0")
-
     tree = ET.parse(preparedfilepath)
     root = tree.getroot()
     for page in root.findall('.//tei:pb', ns):
@@ -72,9 +100,16 @@ def improveXML():
     divElem.append(pElem)
     bodyElem = root.find('.//tei:body', ns)
     possibleHeaders = []
+    nextGathering = 0
+    nextGatheringBreak = 0
 
     for elem in bodyElem.findall('./*', ns):
         if elem.tag == tei + 'pb':
+            if pageno == nextGatheringBreak:
+                newGath = ET.Element('gb', {'n': gatherings[nextGathering][0]})
+                pElem.append(newGath)
+                nextGatheringBreak += gatherings[nextGathering][1] * 2
+                nextGathering += 1
             if lineno < 3:
                 for l in possibleHeaders:
                     pElem.append(l)
@@ -169,8 +204,11 @@ def checkHeader(lines, pageno):
                 lines[i][0].tag = tei + 'fw'
                 lines[i][0].set('type', 'header')
             if i not in header and not hi[i]:
-                lines[i].tag = tei + 'fw'
-                lines[i].set('type', 'header')
+                text = lines[i].text if lines[i].text is not None else ''
+                lines[i].text = ''
+                newHi = ET.Element('fw', {'type': 'header'})
+                newHi.text = text
+                lines[i].append(newHi)
 
     # assign formwork tags to headings
     if header[0] is not None:
@@ -178,22 +216,31 @@ def checkHeader(lines, pageno):
             lines[header[0]][0].tag = tei + 'fw'
             lines[header[0]][0].set('type', 'pagination')
         else:
-            lines[header[0]].tag = tei + 'fw'
-            lines[header[0]].set('type', 'pagination')
+            text = lines[header[0]].text if lines[header[0]].text is not None else ''
+            lines[header[0]].text = ''
+            newHi = ET.Element('fw', {'type': 'pagination'})
+            newHi.text = text
+            lines[header[0]].append(newHi)
     if header[1] is not None:
         if hi[header[1]]:
             lines[header[1]][0].tag = tei + 'fw'
             lines[header[1]][0].set('type', 'header')
         else:
-            lines[header[1]].tag = tei + 'fw'
-            lines[header[1]].set('type', 'header')
+            text = lines[header[1]].text if lines[header[1]].text is not None else ''
+            lines[header[1]].text = ''
+            newHi = ET.Element('fw', {'type': 'header'})
+            newHi.text = text
+            lines[header[1]].append(newHi)
     if header[2] is not None:
         if hi[header[2]]:
             lines[header[2]][0].tag = tei + 'fw'
             lines[header[2]][0].set('type', 'header')
         else:
-            lines[header[2]].tag = tei + 'fw'
-            lines[header[2]].set('type', 'header')
+            text = lines[header[2]].text if lines[header[2]].text is not None else ''
+            lines[header[2]].text = ''
+            newHi = ET.Element('fw', {'type': 'header'})
+            newHi.text = text
+            lines[header[2]].append(newHi)
 
     return lines
 

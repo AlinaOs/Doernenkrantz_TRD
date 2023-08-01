@@ -111,7 +111,7 @@ class TextExtractor:
                             if joined != '':
                                 # re-add syllabification marker if a word is broken over two pages
                                 li = -1
-                                if len(pageLines[-1].findall('./' + self.tei + 'fw[@type="sig"]')) > 0:
+                                if len(pageLines[-1].findall('./' + self.tei + 'fw[@type="sig"]')) > 0 and len(pageLines) >= 2:
                                     li = -2
                                 if len(pageLines[li].findall('./' + self.tei + 'pc[@type="syllabification"]')) > 0:
                                     joined += '-'
