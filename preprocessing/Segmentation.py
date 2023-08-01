@@ -322,6 +322,7 @@ class TextSegmenter:
 
         fulltext = fulltext.replace('-', '')
         fulltext = self.TC.joinlineends(fulltext)
+        # Todo? docid for joinlineends?
         fulltext = fulltext.strip()
         pages.pop('0')
         parts.pop('0')

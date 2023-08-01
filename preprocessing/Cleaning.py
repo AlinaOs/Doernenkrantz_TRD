@@ -11,34 +11,31 @@ class TextCleaner:
     standardLCnorm = []
     prefixes = []
 
-    def __init__(self, standardCSnorm, standardLCnorm, prefixes, vocab=None):
+    def __init__(self, standardCSnorm, standardLCnorm, prefixes, vocab: Dictionary):
         """
         Initializes and returns a TextCleaner.
 
         :param standardCSnorm: Path to CSV file containing normalization rules that are case-sensitive.
         :param standardLCnorm: Path to CSV file containing normalization rules that are case-insensitive (lowercase).
         :param prefixes: Path to CSV file containing a list of prefixes that should be checked for word-joining.
-        :param vocab: Optional path or Dictionary object for the initiation of a vocabulary.
+        :param vocab: Dictionary object for the initiation of a vocabulary.
         """
         self.standardCSnorm = readDictFromCSV(standardCSnorm) if standardCSnorm is not None else []
         self.standardLCnorm = readDictFromCSV(standardLCnorm) if standardLCnorm is not None else []
         self.prefixes = readDictFromCSV(prefixes) if prefixes is not None else []
-        if isinstance(vocab, Dictionary):
-            self.vocab = vocab
-        else:
-            self.vocab = Dictionary(vocab)
+        self.vocab = vocab
 
-    def cleanTextFromCSV(self, input, output, normalize=True, lowercase=False, addnorm=None):
+    def cleanTextFromCSV(self, input, output, normalize=True, lowercase=False, addnorm=None, docid=None):
         csv = readFromCSV(input)
         if addnorm is not None:
             addnorm = readDictFromCSV(addnorm)
         delete = []
         for i in range(len(csv['lines'])):
             l = csv['lines'][i]
-            l[0] = self.cleanText(l[0], normalize, addnorm)
-            l[0] = self.joinlineends(l[0])
+            l[0] = self.cleanText(l[0], normalize, lowercase, addnorm, docid)
+            l[0] = self.joinlineends(l[0], docid)
             if normalize:
-                l[0] = self.joinprefixes(l[0])
+                l[0] = self.joinprefixes(l[0], docid)
                 l[0] = l[0].strip()
             if l[0] == '':
                 delete.append(i)
@@ -46,7 +43,7 @@ class TextCleaner:
             csv['lines'].pop(i)
         writeToCSV(output, csv['lines'], header=csv['header'])
 
-    def cleanText(self, text: str, normalize=True, lowercase=False, addnorm=None):
+    def cleanText(self, text: str, normalize=True, lowercase=False, addnorm=None, docid=None):
         """
         Cleans the given text by dealing with punctuation, whitespaces and case. If normalize is set to True (default),
         standard normalization will be performed based on the normalization rules that were initiated with the
@@ -117,6 +114,7 @@ class TextCleaner:
         text = text.replace('.', '#SEND#')
         text = text.replace(':', '#SEND#')
         text = text.replace('!', '#SEND#')
+        text = text.replace('?', '#SEND#')
         text = text.replace('(', '#INSTART#')
         text = text.replace(')', '#INEND#')
 
@@ -125,7 +123,7 @@ class TextCleaner:
         self.vocab.updateDict(
             re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ',
                    re.sub(r'\w+#lb#$', '',
-                          re.sub(r'\w+#lb#\w+', '', text)))
+                          re.sub(r'\w+#lb#\w+', '', text))), docid
         )
 
         return text
@@ -144,7 +142,7 @@ class TextCleaner:
 
         return text
 
-    def joinprefixes(self, text):
+    def joinprefixes(self, text, docid=None):
         """
         Tests, whether a lonely prefix has to be joined with the following word.
         The prefixes that are considered are those initiated with the TextCleaner object and the method used for
@@ -155,10 +153,10 @@ class TextCleaner:
         for pre in self.prefixes:
             candidates = re.findall(pre['regex'], text)
             if len(candidates) > 0:
-                text = self.joinwords(text, candidates, ' ', invocab=True, joinright=True)
+                text = self.joinwords(text, candidates, ' ', invocab=True, joinright=True, docid=docid)
         return text
 
-    def joinlineends(self, text):
+    def joinlineends(self, text, docid=None):
         """
         Tests, whether tokens separated by linebreaks (marked as "#lb" in the
         input text) are actually only one word. If yes, then the tokens get joined.
@@ -174,15 +172,15 @@ class TextCleaner:
         text = re.sub(r'^#lb#\s?', '', text)
         text = re.sub(r'(?<=\s)#lb#|#lb#(?=\s)', ' ', text)
         candidates = re.findall(r'\w+#lb#\w+', text)
-        text = self.joinwords(text, candidates, '#lb#')
+        text = self.joinwords(text, candidates, '#lb#', docid=docid)
         if re.search(r'\w+#lb#\w+', text):
             # There exists a line that consists only of one word. this word is therefore encased in
             # linebreaks and the second linebreak still needs to be checked.
-            text = self.joinlineends(text)
+            text = self.joinlineends(text, docid=docid)
         text = re.sub(r'\s+', ' ', text)
         return text
 
-    def joinwords(self, text, candidates, separator, joinright=False, invocab=False):
+    def joinwords(self, text, candidates, separator, joinright=False, invocab=False, docid=None):
         """
         Tests whether two tokens (the candidate pair) form one single word and should therefore be joined.
         The algorithm works naively and linguistically uninformed, but is based on the
@@ -225,9 +223,9 @@ class TextCleaner:
                 j = True
                 separated = str(c).split(separator)
 
-            noj = self.vocab.getWordFrequency(joined.lower())
-            nosep1 = self.vocab.getWordFrequency(separated[0].lower())
-            nosep2 = self.vocab.getWordFrequency(separated[1].lower())
+            noj = self.vocab.getGlobalFrequency(joined.lower())
+            nosep1 = self.vocab.getGlobalFrequency(separated[0].lower())
+            nosep2 = self.vocab.getGlobalFrequency(separated[1].lower())
 
             if invocab:
                 nosep1 = nosep1 - 1 if nosep1 and nosep1 - 1 > 0 else False
@@ -277,14 +275,14 @@ class TextCleaner:
 
             if j:
                 text = text.replace(c, joined)
-                self.vocab.addWord(joined.lower())
+                self.vocab.addWord(joined.lower(), docid)
                 if invocab:
-                    self.vocab.removeWord(nosep1)
-                    self.vocab.removeWord(nosep2)
+                    self.vocab.removeWord(nosep1, docid)
+                    self.vocab.removeWord(nosep2, docid)
 
             else:
                 text = text.replace(c, ' '.join(separated))
                 if not invocab:
-                    self.vocab.addWord(separated[0].lower())
-                    self.vocab.addWord(separated[1].lower())
+                    self.vocab.addWord(separated[0].lower(), docid)
+                    self.vocab.addWord(separated[1].lower(), docid)
         return text
