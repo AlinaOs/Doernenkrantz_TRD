@@ -20,6 +20,8 @@ class ScoringMatrix:
             self.SM = SM.astype(np.float)
         elif init is not None and isinstance(init, list):
             self.SM = np.asarray(init)
+        elif init is not None and isinstance(init, np.ndarray):
+            self.SM = init
         else:
             self.SM = np.full((26, 26), -1)
             for i in range(26):
@@ -55,8 +57,45 @@ class StringSimilarity:
             'SM': 'standard',
             'gap': 0.5,
             'gapex': 1
+        },
+        'ripuarian': {
+            'SM': 'ripuarian',
+            'gap': 0.5,
+            'gapex': 1
         }
     }
+
+    leftalone = [['c', 'g'], ['g'], ['d']]
+    leftfull = ['ck', 'gh', 'dt']
+    rightalone = [['k', 'g'], ['z'], ['t']]
+    rightfull = ['ck', 'tz', 'dt']
+    vowels = ['a', 'e', 'i', 'o', 'u']
+    homographies = [('i', 'j'), ('i', 'y'), ('j', 'y'), ('c', 'k'), ('c', 'z'), ('u', 'v'), ('v', 'w'), ('f', 'v')]
+    phonologic = [('d', 't'), ('c', 'g'), ('k', 'g'), ('m', 'n'), ('e', 'i'), ('u', 'o'), ('g', 'j'), ('b', 'v'),
+                  ('s', 'z'), ('b', 'p')]
+    visual = [('k', 'l'), ('b', 'h'), ('t', 'r'), ('s', 'f'), ('i', 't'), ('e', 'c'), ('u', 'n')]
+
+    def __init__(self):
+
+        PhonSM = np.full((26, 26), -1)
+        for i in range(26):
+            PhonSM[i, i] = 1
+        for v in self.vowels:
+            for vv in self.vowels:
+                if v != vv:
+                    PhonSM[string.ascii_lowercase.index(v), string.ascii_lowercase.index(vv)] = -0.5
+                    PhonSM[string.ascii_lowercase.index(vv), string.ascii_lowercase.index(v)] = -0.5
+        for pair in self.homographies:
+            PhonSM[string.ascii_lowercase.index(pair[1]), string.ascii_lowercase.index(pair[0])] = 1
+            PhonSM[string.ascii_lowercase.index(pair[0]), string.ascii_lowercase.index(pair[1])] = 1
+        for pair in self.phonologic:
+            PhonSM[string.ascii_lowercase.index(pair[0]), string.ascii_lowercase.index(pair[1])] = 0
+            PhonSM[string.ascii_lowercase.index(pair[1]), string.ascii_lowercase.index(pair[0])] = 0
+        for pair in self.visual:
+            PhonSM[string.ascii_lowercase.index(pair[0]), string.ascii_lowercase.index(pair[1])] = -0.5
+            PhonSM[string.ascii_lowercase.index(pair[1]), string.ascii_lowercase.index(pair[0])] = -0.5
+        PhonSM = ScoringMatrix(PhonSM, 'ripuarian')
+        self.registerSM(PhonSM)
 
     def registerSM(self, SM: ScoringMatrix):
         name = SM.getname()
@@ -79,7 +118,7 @@ class StringSimilarity:
     # https://gist.github.com/slowkow/06c6dba9180d013dfd82bec217d22eb5.
     # It was broadly restructured and adapted to include a custom scoring matrix and a variable gap penalty. Also, the
     # function was changed to return a result containing different types of information instead of aligned strings.
-    def newu(self, x, y, simconf: str = None):
+    def newu(self, x, y, simconf: str = None, phonetic=False):
         if simconf is not None:
             if simconf not in self.configs.keys():
                 print('Simconf not in keys. Self.configs:')
@@ -94,7 +133,10 @@ class StringSimilarity:
         else:
             simconf = self.configs['standard']
 
-        F, P = self.__nwmatrix(x, y, simconf['SM'], simconf['gap'], simconf['gapex'])
+        if phonetic:
+            F, P = self.__nwphonmatrix(x, y, simconf['SM'], simconf['gap'], simconf['gapex'])
+        else:
+            F, P = self.__nwmatrix(x, y, simconf['SM'], simconf['gap'], simconf['gapex'])
 
         # Trace through an optimal alignment.
         i = len(x)
@@ -108,11 +150,11 @@ class StringSimilarity:
                 ry.append(y[j - 1])
                 i -= 1
                 j -= 1
-            elif P[i, j] == 'left':
+            elif P[i, j] == 'left' or P[i, j] == 'lcom':
                 rx.append('-')
                 ry.append(y[j - 1])
                 j -= 1
-            elif P[i, j] == 'top':
+            elif P[i, j] == 'top' or P[i, j] == 'tcom':
                 rx.append(x[i - 1])
                 ry.append('-')
                 i -= 1
@@ -134,9 +176,14 @@ class StringSimilarity:
 
         hm = self.SM[simconf['SM']].highestmatch()
 
+        if phonetic:
+            normsim = self.__favorleftnwnorm(x, y, F[len(x), len(y)])
+        else:
+            normsim = self.__nwnorm(x, y, F[len(x), len(y)], hm)
+
         result = {
             'sim': F[len(x), len(y)],
-            'normsim': self.__nwnorm(x, y, F[len(x), len(y)], hm),
+            'normsim': normsim,
             'alignx': rx,
             'aligny': ry
         }
@@ -158,16 +205,16 @@ class StringSimilarity:
 
         # Pointers to trace through an optimal alignment.
         P = np.full((nx + 1, ny + 1), 'none')
-        P[:, 0] = 'left'
-        P[0, :] = 'up'
+        P[:, 0] = 'top'
+        P[0, :] = 'left'
 
         # Temporary scores.
         t = np.zeros(3)
         for i in range(1, nx + 1):
             for j in range(1, ny + 1):
                 t[0] = F[i - 1, j - 1] + SM[x[i - 1], y[j - 1]]
-                t[1] = F[i, j - 1] - gapstart if P[i, j - 1] == 2 else F[i, j - 1] - gapex
-                t[2] = F[i - 1, j] - gapstart if P[i - 1, j] == 2 else F[i - 1, j] - gapex
+                t[1] = F[i, j - 1] - gapex if P[i, j - 1] == 'left' or P[i, j - 1] == 'top' else F[i, j - 1] - gapstart
+                t[2] = F[i - 1, j] - gapex if P[i - 1, j] == 'left' or P[i - 1, j] == 'top' else F[i - 1, j] - gapstart
 
                 tmax = np.max(t)
                 F[i, j] = tmax
@@ -181,6 +228,155 @@ class StringSimilarity:
 
         return F, P
 
+    def __nwphonmatrix(self, x, y, SM: str = None, gapstart=1.0, gapex=1):
+        if SM is None:
+            SM = self.SM['standard']
+        else:
+            SM = self.SM[SM]
+
+        nx = len(x)
+        ny = len(y)
+
+        # Optimal score at each possible pair of characters.
+        F = np.zeros((nx + 1, ny + 1))
+        F[:, 0] = np.asarray([0.0] + [-gapstart - i * gapex for i in range(nx)])
+        F[0, :] = np.asarray([0.0] + [-gapstart - i * gapex for i in range(ny)])
+
+        # Pointers to trace through an optimal alignment.
+        P = np.full((nx + 1, ny + 1), 'none')
+        P[:, 0] = 'top'
+        P[0, :] = 'left'
+        P[0, 0] = 'diag'
+
+        # Temporary scores.
+        t = np.zeros(3)
+        for i in range(1, nx + 1):
+            for j in range(1, ny + 1):
+                t[0] = F[i - 1, j - 1] + self.favorLeft(nx, ny, i - 1, j - 1, SM[x[i - 1], y[j - 1]])
+
+                if SM[x[i - 1], y[j - 1]] >= 0 and (P[i - 1, j - 1] == 'left' or P[i - 1, j - 1] == 'top'):
+                    combi = self.checkCombiGap(y, x, j - 1, i - 1, left=False) if P[i - 1, j - 1] == 'top' \
+                        else self.checkCombiGap(x, y, i - 1, j - 1, left=False)
+                    if combi:
+                        if i >= 2 and P[i - 1, j - 1] == 'top' and \
+                                (P[i - 2, j - 1] == 'left' or P[i - 2, j - 1] == 'top'):
+                            t[0] += self.favorLeft(nx, ny, i-2, j-1, gapex)
+                        elif j >= 2 and P[i - 1, j - 1] == 'left' and \
+                                (P[i - 1, j - 2] == 'left' or P[i - 1, j - 2] == 'top'):
+                            t[0] += self.favorLeft(nx, ny, i-1, j-2, gapex)
+                        else:
+                            t[0] += self.favorLeft(nx, ny, i-1, j-1, gapstart)
+
+                leftcombi = False
+                if P[i, j - 1] == 'diag' and self.checkCombiGap(x, y, i - 1, j - 2, left=True):
+                    t[1] = F[i, j - 1]  # combi in y, gapped combi in x
+                    leftcombi = True
+                else:
+                    t[1] = F[i, j - 1] - self.favorLeft(nx, ny, i - 1, j - 1, gapex) if P[i, j - 1] == 'top' or P[
+                        i, j - 1] == 'left' \
+                        else F[i, j - 1] - self.favorLeft(nx, ny, i - 1, j - 1, gapstart)  # gap in x
+
+                if P[i - 1, j] == 'diag' and self.checkCombiGap(y, x, j - 1, i - 2, left=True):
+                    t[2] = F[i - 1, j]  # combi in x, gapped combi in y
+                    leftcombi = True
+                else:
+                    t[2] = F[i - 1, j] - self.favorLeft(nx, ny, i - 1, j - 1, gapex) if P[i - 1, j] == 'top' or P[
+                        i - 1, j] == 'left' \
+                        else F[i - 1, j] - self.favorLeft(nx, ny, i - 1, j - 1, gapstart)  # gap in y
+
+                tmax = np.max(t)
+                F[i, j] = tmax
+
+                if t[0] == tmax:
+                    P[i, j] = 'diag'
+                if t[1] == tmax:
+                    if leftcombi:
+                        P[i, j] = 'lcom'
+                    else:
+                        P[i, j] = 'left'
+                if t[2] == tmax:
+                    if leftcombi:
+                        P[i, j] = 'tcom'
+                    else:
+                        P[i, j] = 'top'
+
+        return F, P
+
+    def favorLeft(self, lenx, leny, idxx, idxy, score, disfavor=3):
+        """
+
+        :param lenx:
+        :param leny:
+        :param idxx:
+        :param idxy:
+        :param score:
+        :param disfavor: The fraction of the word to score less. If 2 is given, the second half of the word scores less,
+        for 3 the last third, for 4 the last fourth and so on. If 1 is given, each letter will be scored less according
+        to the length of each word. If 0 is given, the given score is returned, i.e. letter position has no influence on
+        scoring.
+        :return:
+        """
+
+        if disfavor > 0:
+            sx = score if idxx+1 <= math.ceil(lenx - (lenx / disfavor)) else score * (1 / lenx) * (lenx - idxx)
+            sy = score if idxy+1 <= math.ceil(leny - (leny / disfavor)) else score * (1 / leny) * (leny - idxy)
+            score = (sx + sy) / 2
+        return score
+
+    def checkCombiGap(self, gappedword: str, fullword: str, gwi: int, fwi: int, left: bool):
+        """
+        Checks whether or not two strings qualify for a combi-substitution at the given index. A combi-substitution
+        is a special case of deletion, where one character is deleted, but since it has been part of a letter
+        combination, the deletion doesn't change the phonetic structure of the word. So the deletion of one character
+        can be seen as a substitution of two characters by one (the still-standing) character.
+
+        :param gappedword: The word with the gap in it.
+        :param fullword: The word without the gap in it.
+        :param gwi: The index of the still-standing letter in gappedword.
+        :param fwi: The index of the corresponding letter in fullword.
+        :param left: Whether or not the still-standing letter is presumed to be the left letter of the combination.
+        Setting this to False indicates, that it is the right letter.
+        :return: True, if the strings qualify for a combi-substitution. Otherwise False.
+        """
+
+        if left:
+            # Is the string long enough to contain a combination?
+            if len(fullword) == fwi + 1:
+                return False
+            full = self.leftfull
+            alone = self.leftalone
+            combi = fullword[fwi:fwi + 1 + 1]
+            vowelcombiidx = 0
+        else:
+            # Is the given index high enough for the string to contain a combination?
+            if fwi == 0:
+                return False
+            full = self.rightfull
+            alone = self.rightalone
+            combi = fullword[fwi - 1:fwi + 1]
+            vowelcombiidx = 1
+
+        normcombi = combi.replace('y', 'i')
+        normcombi = normcombi.replace('j', 'i')
+
+        # Is it a double character combi?
+        if normcombi[0] == normcombi[1] and normcombi[0] == gappedword[gwi]:
+            return True
+        # Is it a double vowel combi?
+        if normcombi[0] in self.vowels and normcombi[1] in self.vowels and normcombi[vowelcombiidx] == gappedword[gwi]:
+            return True
+
+        # If not, check special combinations
+        try:
+            combiidx = full.index(combi)
+        except ValueError:
+            return False
+        # Is the letter before the gap the corresponding independent letter?
+        if gappedword[gwi] not in alone[combiidx]:
+            return False
+        # If it passes all tests, the wordpair qualifies for the combination bonus
+        return True
+
     def __nwnorm(self, x, y, nwscore, averagematch=1):
         hs = np.max([len(x), len(y)]) * averagematch
         return nwscore / hs
@@ -193,6 +389,19 @@ class StringSimilarity:
         # Todo: Check, whether the stem may be the stemma of the given word
         return True if word.find(stem) >= 0 else False
 
+    def __favorleftnwnorm(self, x, y, nwscore, disfavor=0):
+        length = np.max([len(x), len(y)])
+        hs = []
+        if disfavor > 0:
+            for i in range(length):
+                if i+1 <= math.ceil(length - (length / disfavor)):
+                    hs.append(1)
+                else:
+                    hs.append((1/length) * (length-i))
+            hs = sum(hs)
+        else:
+            hs = length
+        return nwscore / hs
 
 # Function used after kind hint from Kelly Bundy at https://stackoverflow.com/a/76599108
 def key(s, t):
