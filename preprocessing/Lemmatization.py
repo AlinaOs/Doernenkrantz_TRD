@@ -8,22 +8,15 @@ import shutil
 import time
 from multiprocessing import Process, Queue
 from operator import itemgetter
-
 import psutil
-from tools.lang import StringSimilarity, ScoringMatrix
+from tools.lang import newu, constructSMfromDict
 import networkx as nx
 from tools.rw import saveDictAsJson, readDictFromJson
 
 
 class Pseudolemmatizer:
 
-    communities = []
-    wordgroups = []
     dateobj = datetime.datetime
-    StrSim = StringSimilarity()
-    #StrSim.registerSM(ScoringMatrix('../input/normalization/SM_unnormalized_phonetic_ocr.csv', 'phonetic'))
-    #simconf = 'phonetic_standardgap'
-    #StrSim.registerconfig('phonetic_standardgap', 'phonetic', gap=0.5, gapex=1.0)
 
     def __init__(self, dirpath, mode='prepare', loadpath=None, wordforms=None, simcsv=None):
         """
@@ -56,28 +49,11 @@ class Pseudolemmatizer:
 
         self.state = -1
         self.G = nx.Graph()
+        self.communities = []
+        self.wordgroups = []
         self.dirpath = dirpath
         self.csvpath = os.path.join(dirpath, 'sims-all.csv')
-
-        # Todo: Use custom StrSim by sharing objects with multiprocessing
-        #self.StrSim = StringSimilarity()
-        #SM = ScoringMatrix('../input/normalization/SM_unnormalized_phonetic_ocr.csv', 'phonetic')
-        #self.StrSim.registerSM(SM)
-        #self.simconf = 'phonetic_standardgap'
-        #self.StrSim.registerconfig('phonetic_standardgap', 'phonetic', gap=0.5, gapex=0.1)
-
-        '''
-        if strsim is not None:
-            self.StrSim = strsim
-            if simconf is not None:
-                self.simconf = simconf
-            else:
-                self.simconf = 'standard'
-        else:
-            self.StrSim = StringSimilarity()
-            self.simconf = 'standard'
-        '''
-
+        self.info = {}
         self.forms = None
         self.lemmas = None
         if mode is not None:
@@ -92,6 +68,7 @@ class Pseudolemmatizer:
             else:
                 self.forms = sorted(wordforms)
                 self.lemmas = [None for i in range(len(self.forms))]
+                self.info['types'] = len(self.forms)
                 if mode == 'prepare':
                     self.prepare(simcsv)
                     self.export()
@@ -99,6 +76,10 @@ class Pseudolemmatizer:
                     self.prepare(simcsv)
                     self.train()
                     self.export()
+        else:
+            self.forms = sorted(wordforms)
+            self.lemmas = [None for i in range(len(self.forms))]
+            self.info['types'] = len(self.forms)
 
     def load(self, full=True, loadpath=None):
         """
@@ -114,14 +95,10 @@ class Pseudolemmatizer:
                 shutil.copy(os.path.join(loadpath, 'wordgroups.json'), os.path.join(self.dirpath, 'wordgroups.json'))
             print(self.date() + ' PL: ...importing word groups...')
             self.loadcommunities(os.path.join(self.dirpath, 'wordgroups.json'))
-        # print('...exporting model infos...') Todo
-        #   Simconfig
-        #   Anzahl Types
-        #   Anzahl Wortgruppen
-        #       zu niedrige meansim
-        #       alleinstehende Wortformen
-        #       zusammengefasste Wortgruppen
-        #   Tuning: Mit ReN oder ohne?
+        print('...loading model infos...')
+        if loadpath is not None:
+            shutil.copy(os.path.join(loadpath, 'info.json'), os.path.join(self.dirpath, 'info.json'))
+        self.info = readDictFromJson(os.path.join(self.dirpath, 'info.json'))
         print(self.date() + ' PL: ...loading words...')
         if loadpath is not None:
             shutil.copy(os.path.join(loadpath, 'words.json'), os.path.join(self.dirpath, 'words.json'))
@@ -158,13 +135,16 @@ class Pseudolemmatizer:
             ))
 
     def readSims(self, csvpath):
+        no = 0
         with open(csvpath, 'r') as csv:
             nextline = csv.readline()
             while nextline is not None and nextline != '':
                 sim = nextline.strip().split(',')
                 if sim[0] != sim[1] and float(sim[3]) > 0:
                     self.G.add_edge(self.forms.index(sim[0]), self.forms.index(sim[1]), weight=float(sim[3]))
+                no += 1
                 nextline = csv.readline()
+        self.info['simpairs'] = no
 
     def export(self):
         """
@@ -180,21 +160,6 @@ class Pseudolemmatizer:
         """
 
         print(self.date() + ' PL: Exporting model...')
-        if self.state == -1:
-            print(self.date() + ' PL: Model is untrained. Nothing to export.')
-            return
-        if self.state == 1:
-            print(self.date() + ' PL: ...exporting word groups...')
-            saveDictAsJson(os.path.join(self.dirpath, 'wordgroups.json'), self.formatcommunities())
-            gc.collect()
-        #print('...exporting model infos...') Todo
-        #   Simconfig
-        #   Anzahl Types
-        #   Anzahl Wortgruppen
-        #       zu niedrige meansim
-        #       alleinstehende Wortformen
-        #       zusammengefasste Wortgruppen
-        #   Tuning: Mit ReN oder ohne?
         print(self.date() + ' PL: ...exporting words...')
         if self.state == 1:
             words = {
@@ -207,6 +172,16 @@ class Pseudolemmatizer:
             }
         saveDictAsJson(os.path.join(self.dirpath, 'words.json'), words)
         gc.collect()
+
+        if self.state == -1:
+            print(self.date() + ' PL: Model is untrained. Nothing else to export.')
+            return
+        if self.state == 1:
+            print(self.date() + ' PL: ...exporting word groups...')
+            saveDictAsJson(os.path.join(self.dirpath, 'wordgroups.json'), self.formatcommunities())
+            gc.collect()
+        print('...exporting model infos...')
+        saveDictAsJson(os.path.join(self.dirpath, 'info.json'), self.info)
         print(self.date() + ' PL: ...exporting human-readable graph...')
         saveDictAsJson(os.path.join(self.dirpath, 'graph.json'),
                        nx.node_link_data(self.G, link='edges', source='w1', target='w2'))
@@ -234,7 +209,8 @@ class Pseudolemmatizer:
             })
         return communities
 
-    def prepare(self, simcsv=None):
+    def prepare(self, smcustomization=None, gapex=1.0, gapstart=0.5, phonetic=False, disfavor=0,
+                combilists=None, simcsv=None):
         """
         Prepare the model for training. This includes calculating similarity values for all possible pairings of the
         model's wordforms and constructing a graph representation of words (as nodes) and similarities (as edges). If a
@@ -246,6 +222,15 @@ class Pseudolemmatizer:
 
         print(self.date() + ' PL: Preparing model.')
         i = 0
+        self.info['simconf'] = {
+            'SM': smcustomization if smcustomization is not None else {},
+            'gapex': gapex,
+            'gapstart':gapstart,
+            'phonetic': phonetic,
+            'combilists': combilists if combilists is not None else {},
+            'disfavor': disfavor
+        }
+
         print(self.date() + ' PL: Adding words as nodes.')
         for word in self.forms:
             self.G.add_node(i, wf=word)
@@ -254,16 +239,20 @@ class Pseudolemmatizer:
         print(self.date() + ' PL: Calculating similarities and adding them as edges.')
 
         if simcsv is None:
-            self.__calculateSimsAllThread()
+            self.__calculateSimsAllThread(smcustomization=smcustomization, gapex=gapex, gapstart=gapstart,
+                                          phonetic=phonetic, disfavor=disfavor, combilists=combilists)
         else:
             self.readSims(os.path.join(self.dirpath, simcsv))
 
         self.state = 0
         print(self.date() + ' PL: Preparation finished:')
-        print('Nodes: ' + str(self.G.number_of_nodes()))
-        print('Edges: ' + str(self.G.number_of_edges()))
+        self.info['nodes'] = self.G.number_of_nodes()
+        self.info['edges'] = self.G.number_of_edges()
+        print('Nodes: ' + str(self.info['nodes']))
+        print('Edges: ' + str(self.info['edges']))
 
-    def __calculateSimsAllThread(self):
+    def __calculateSimsAllThread(self, smcustomization=None, gapex=1.0, gapstart=0.5, phonetic=False,
+                                 disfavor=0, combilists=None):
         """
         Calculate the similarity between all possible pairings of the words in the lemmatizers wordform list. The
         calculation is done with as many processes as are available on the machine that the programme is executed on.
@@ -274,6 +263,7 @@ class Pseudolemmatizer:
         pno = len(psutil.Process().cpu_affinity())
         batches = [(i, len(self.forms) - i) for i in range(len(self.forms))]
         full = int(((len(self.forms) + 1) * len(self.forms)) / 2)
+        self.info['simpairs'] = full
         part = full/pno
         partitions = []
         counts = []
@@ -312,7 +302,7 @@ class Pseudolemmatizer:
             csvpath = os.path.join(tmppath, str(p + 1) + '-' + str(pno) + '.csv')
             p = Process(target=self._calculateSimsBatch, name=str(p+1)+'/'+str(pno),
                         args=(partitions[p], self.forms, counts[p], str(p+1)+'/'+str(pno),
-                              csvpath, q))
+                              csvpath, q, smcustomization, gapex, gapstart, phonetic, disfavor, combilists))
             processes.append(p)
             p.start()
 
@@ -335,7 +325,12 @@ class Pseudolemmatizer:
                 os.remove(f)
         os.rmdir(tmppath)
 
-    def _calculateSimsBatch(self, idxes, words, full, name: str, csvpath, q: Queue):
+    def _calculateSimsBatch(self, idxes, words, full, name: str, csvpath, q: Queue, smcustomization=None, gapex=1.0,
+                            gapstart=0.5, phonetic=False, disfavor=0, combilists=None):
+        if smcustomization is None:
+            SM = None
+        else:
+            SM = constructSMfromDict(smcustomization)
         print(self.date() + ' PL-' + name + ': Calculating similarities for word pair 1 of ' + str(full))
         step = int((10 ** (int(math.log10(full)))) / 2)
         no = 1
@@ -359,7 +354,8 @@ class Pseudolemmatizer:
                         sims = []
                         print(self.date() + ' PL-' + name + ':... written up to ' + str(no-1) + ' to csv.')
                         gc.collect()
-                    sim = self.StrSim.newu(words[i], words[j])
+                    sim = newu(words[i], words[j], SM=SM, gapex=gapex, gapstart=gapstart,
+                               phonetic=phonetic, disfavor=disfavor, combilists=combilists)
                     sims.append(
                         f'{words[i]},{words[j]},{sim["sim"]},{sim["normsim"]},{sim["alignx"]},{sim["aligny"]}\n')
                     if i != j and sim['normsim'] > 0:
@@ -418,6 +414,8 @@ class Pseudolemmatizer:
                 self.communities.extend(self.assignRepresentative(communities))
                 if coverage == oldcov:
                     print(self.date() + ' PL: Community detection converges.')
+                    self.info['comno'] = len(self.communities) + len(weakcomms)
+                    self.info['weakcomno'] = len(weakcomms)
                     self.communities.extend(self.assignRepresentative(weakcomms))
                     break
                 communities = []
@@ -432,27 +430,16 @@ class Pseudolemmatizer:
                     ))
                 weakcomms = []
                 it += 1
-
-            # Todo filter communities even further when cd converges?
-            # print(self.date() + ' PL: Community detection converges. Identifying outliers.')
-
-            '''
-            it = 1
-            while len(weakcomms) > 0:
-                print(self.date() +
-                      f' PL: Covered {coverage} of {len(self.forms)} wordforms. Starting iteration no. {it}.')
-                qual, weakcomms, c = self.qualitizecommunities(weakcomms)
-                coverage += c
-                self.communities.extend(self.assignRepresentative(qual))
-            print(self.date() + ' PL: Done. All communities are fully connected.')
-            '''
         else:
             self.communities.extend(self.assignRepresentative(communities))
+            self.info['comno'] = len(self.communities)
 
         print(self.date() + ' PL: Assigning lemmata.')
         self.assignLemmata()
 
-        print(self.date() + ' PL: Training finished: '+ str(len(set(self.lemmas))) + ' unique lemmata.')
+        self.info['lemmacount'] = len(set(self.lemmas))
+
+        print(self.date() + ' PL: Training finished: '+ str(self.info['lemmacount']) + ' unique lemmata.')
 
         self.state = 1
 
