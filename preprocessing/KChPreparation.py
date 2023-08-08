@@ -158,7 +158,7 @@ def improveXML():
 
 
 def gettext(node):
-    if node.find('./*') is not None:
+    if node.find('./*') is not None and node[0].tag != tei + 'pc':
         text = node[0].text if node[0].text is not None else ''
     else:
         text = node.text if node.text is not None else ''
@@ -174,24 +174,30 @@ def checkHeader(lines, pageno):
         for i in range(len(lines)):
             if header[0] is None and len(texts[i]) <= 12 and len(re.sub(r'[ijvuxlcdm.\s]', '', texts[i])) <= 3:
                 header[0] = i
-            elif header[1] is None and re.search(r'[Kk]?[ae][ijy]{1,2}[sß]er?', texts[i]):
-                header[1] = 1
-            elif header[2] is None and re.search(r'[Kk]?[ou]n[ijy]{1,2}n([gkc]|ck)', texts[i]):
-                header[2] = 2
+            elif header[1] is None and re.search(r'[Kk]?[ae][ijy]{1,2}[sß]er?', texts[i])\
+                    or re.search(r'[rR]oe?mi?sch(e|er)? ?[Kk]?[ou]n[ijy]{1,2}n([gkc]|ck)', texts[i]):
+                header[1] = i
+            elif header[2] is None and re.search(r'[Kk]?[ou]n[ijy]{1,2}n([gkc]|ck)', texts[i])\
+                    or re.search(r'[vVuUfF]ranc?krij?ch', texts[i]):
+                header[2] = i
     else:
         # recto
         for i in range(len(lines)):
             if header[0] is None and len(texts[i]) <= 12 and len(re.sub(r'[ijvuxlcdm.\s]', '', texts[i])) <= 3:
                 header[0] = i
             elif header[1] is None and re.search(r'[Pp]a[ijy]{1,2}[sß]', texts[i]):
-                header[1] = 1
-            elif header[2] is None and re.search(r'[Bb]?[ijy]{1,2}ss?ch[ou](ff?|[uv]e?)', texts[i]):
-                header[2] = 2
+                header[1] = i
+            elif header[2] is None and re.search(r'[Bb]?[ijyu]{1,2}ss?ch[ou](ff?|[uv]e?)', texts[i]):
+                header[2] = i
 
     if header[0] is None and header[1] is None and header[2] is None and hi[0]:
         # Default: If no header can be found by buzzword, then the first line will become a header if it is written
         # in a heading font. The other two lines won't be considered as headings.
         header[1] = 0
+    elif header[0] == 0 and header[1] is None and header[2] is None and hi[1]:
+        # Default: If no header but a pagination can be found by buzzword, then the first line after the pagination will
+        # become a header if it is written in a heading font. The third line won't be considered as heading.
+        header[1] = 1
     else:
         # Completion: If (e.g., for OCR-reasons) only one line was recognized as header, then all lines before that line
         # become headings too.
@@ -203,10 +209,11 @@ def checkHeader(lines, pageno):
             if i not in header and hi[i]:
                 lines[i][0].tag = tei + 'fw'
                 lines[i][0].set('type', 'header')
+                lines[i][0].set('rendition', '#TW15.175G')
             if i not in header and not hi[i]:
                 text = lines[i].text if lines[i].text is not None else ''
                 lines[i].text = ''
-                newHi = ET.Element('fw', {'type': 'header'})
+                newHi = ET.Element('fw', {'type': 'header', 'rendition': '#TW15.175G'})
                 newHi.text = text
                 lines[i].append(newHi)
 
@@ -215,30 +222,33 @@ def checkHeader(lines, pageno):
         if hi[header[0]]:
             lines[header[0]][0].tag = tei + 'fw'
             lines[header[0]][0].set('type', 'pagination')
+            lines[header[0]][0].set('rendition', '#TW15.175G')
         else:
             text = lines[header[0]].text if lines[header[0]].text is not None else ''
             lines[header[0]].text = ''
-            newHi = ET.Element('fw', {'type': 'pagination'})
+            newHi = ET.Element('fw', {'type': 'pagination', 'rendition': '#TW15.175G'})
             newHi.text = text
             lines[header[0]].append(newHi)
     if header[1] is not None:
         if hi[header[1]]:
             lines[header[1]][0].tag = tei + 'fw'
             lines[header[1]][0].set('type', 'header')
+            lines[header[1]][0].set('rendition', '#TW15.175G')
         else:
             text = lines[header[1]].text if lines[header[1]].text is not None else ''
             lines[header[1]].text = ''
-            newHi = ET.Element('fw', {'type': 'header'})
+            newHi = ET.Element('fw', {'type': 'header', 'rendition': '#TW15.175G'})
             newHi.text = text
             lines[header[1]].append(newHi)
     if header[2] is not None:
         if hi[header[2]]:
             lines[header[2]][0].tag = tei + 'fw'
             lines[header[2]][0].set('type', 'header')
+            lines[header[2]][0].set('rendition', '#TW15.175G')
         else:
             text = lines[header[2]].text if lines[header[2]].text is not None else ''
             lines[header[2]].text = ''
-            newHi = ET.Element('fw', {'type': 'header'})
+            newHi = ET.Element('fw', {'type': 'header', 'rendition': '#TW15.175G'})
             newHi.text = text
             lines[header[2]].append(newHi)
 

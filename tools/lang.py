@@ -169,7 +169,7 @@ def __nwmatrix(x, y, SM: str = None, gapstart=0.5, gapex=1.0):
     return F, P
 
 
-def __nwphonmatrix(x, y, SM: str = None, gapstart=1.0, gapex=1.0, combilists=None):
+def __nwphonmatrix(x, y, SM: str = None, gapstart=1.0, gapex=1.0, disfavor=0, combilists=None):
     if SM is None:
         SM = ScoringMatrix('standard')
     if combilists is None:
@@ -193,7 +193,7 @@ def __nwphonmatrix(x, y, SM: str = None, gapstart=1.0, gapex=1.0, combilists=Non
     t = np.zeros(3)
     for i in range(1, nx + 1):
         for j in range(1, ny + 1):
-            t[0] = F[i - 1, j - 1] + favorLeft(nx, ny, i - 1, j - 1, SM[x[i - 1], y[j - 1]])
+            t[0] = F[i - 1, j - 1] + favorLeft(nx, ny, i - 1, j - 1, SM[x[i - 1], y[j - 1]], disfavor=disfavor)
 
             if SM[x[i - 1], y[j - 1]] >= 0 and (P[i - 1, j - 1] == 'left' or P[i - 1, j - 1] == 'top'):
                 combi = checkCombiGap(y, x, j - 1, i - 1, left=False, combilists=combilists) if P[i - 1, j - 1] == 'top' \
@@ -201,29 +201,29 @@ def __nwphonmatrix(x, y, SM: str = None, gapstart=1.0, gapex=1.0, combilists=Non
                 if combi:
                     if i >= 2 and P[i - 1, j - 1] == 'top' and \
                             (P[i - 2, j - 1] == 'left' or P[i - 2, j - 1] == 'top'):
-                        t[0] += favorLeft(nx, ny, i-2, j-1, gapex)
+                        t[0] += favorLeft(nx, ny, i-2, j-1, gapex, disfavor=disfavor)
                     elif j >= 2 and P[i - 1, j - 1] == 'left' and \
                             (P[i - 1, j - 2] == 'left' or P[i - 1, j - 2] == 'top'):
-                        t[0] += favorLeft(nx, ny, i-1, j-2, gapex)
+                        t[0] += favorLeft(nx, ny, i-1, j-2, gapex, disfavor=disfavor)
                     else:
-                        t[0] += favorLeft(nx, ny, i-1, j-1, gapstart)
+                        t[0] += favorLeft(nx, ny, i-1, j-1, gapstart, disfavor=disfavor)
 
             leftcombi = False
             if P[i, j - 1] == 'diag' and checkCombiGap(x, y, i - 1, j - 2, left=True, combilists=combilists):
                 t[1] = F[i, j - 1]  # combi in y, gapped combi in x
                 leftcombi = True
             else:
-                t[1] = F[i, j - 1] - favorLeft(nx, ny, i - 1, j - 1, gapex) if P[i, j - 1] == 'top' or P[
-                    i, j - 1] == 'left' \
-                    else F[i, j - 1] - favorLeft(nx, ny, i - 1, j - 1, gapstart)  # gap in x
+                t[1] = F[i, j - 1] - favorLeft(nx, ny, i - 1, j - 1, gapex, disfavor=disfavor) if P[i, j - 1] == 'top'\
+                    or P[i, j - 1] == 'left' \
+                    else F[i, j - 1] - favorLeft(nx, ny, i - 1, j - 1, gapstart, disfavor=disfavor)  # gap in x
 
             if P[i - 1, j] == 'diag' and checkCombiGap(y, x, j - 1, i - 2, left=True, combilists=combilists):
                 t[2] = F[i - 1, j]  # combi in x, gapped combi in y
                 leftcombi = True
             else:
-                t[2] = F[i - 1, j] - favorLeft(nx, ny, i - 1, j - 1, gapex) if P[i - 1, j] == 'top' or P[
-                    i - 1, j] == 'left' \
-                    else F[i - 1, j] - favorLeft(nx, ny, i - 1, j - 1, gapstart)  # gap in y
+                t[2] = F[i - 1, j] - favorLeft(nx, ny, i - 1, j - 1, gapex, disfavor=disfavor) if P[i - 1, j] == 'top'\
+                    or P[i - 1, j] == 'left' \
+                    else F[i - 1, j] - favorLeft(nx, ny, i - 1, j - 1, gapstart, disfavor=disfavor)  # gap in y
 
             tmax = np.max(t)
             F[i, j] = tmax
@@ -252,7 +252,7 @@ def newu(x, y, SM=None, gapstart=0.5, gapex=1.0, phonetic=False, disfavor=0,
          combilists=None):
 
     if phonetic:
-        F, P = __nwphonmatrix(x, y, SM, gapstart, gapex, combilists=combilists)
+        F, P = __nwphonmatrix(x, y, SM, gapstart, gapex, disfavor=disfavor, combilists=combilists)
     else:
         F, P = __nwmatrix(x, y, SM, gapstart, gapex)
 
@@ -293,7 +293,7 @@ def newu(x, y, SM=None, gapstart=0.5, gapex=1.0, phonetic=False, disfavor=0,
     ry = ''.join(ry)[::-1]
 
     if phonetic:
-        normsim = __favorleftnwnorm(x, y, F[len(x), len(y)])
+        normsim = __favorleftnwnorm(x, y, F[len(x), len(y)], disfavor=disfavor)
     else:
         normsim = __nwnorm(x, y, F[len(x), len(y)])
 
@@ -307,9 +307,9 @@ def newu(x, y, SM=None, gapstart=0.5, gapex=1.0, phonetic=False, disfavor=0,
 
 
 def constructSMfromDict(smdict: dict):
-    SM = np.full((26, 26), -1)
+    SM = np.full((26, 26), -1.0)
     for i in range(26):
-        SM[i, i] = 1
+        SM[i, i] = 1.0
     for k in smdict['pairscores'].keys():
         score = float(k)
         for pair in smdict['pairscores'][k]:
@@ -336,16 +336,16 @@ class Dictionary:
     manipulating and enhancing the dictionary.
     """
 
-    words = []
-    freqs = []
-    dfreqs = {}
-
     def __init__(self, initial=None):
         """
         Initiate a new Dictionary instance. If a path to a preexisting dictionary in a serialized form is given, the
         dictionary will be initialized using the data in this foundational dictionary.
         :param initial: Optional path to a previously exported dictionary.
         """
+
+        self.words = []
+        self.freqs = []
+        self.dfreqs = {}
 
         if initial is not None:
             self._loadDict(initial)

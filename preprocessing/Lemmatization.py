@@ -18,7 +18,7 @@ class Pseudolemmatizer:
 
     dateobj = datetime.datetime
 
-    def __init__(self, dirpath, mode='prepare', loadpath=None, wordforms=None, simcsv=None):
+    def __init__(self, dirpath, name, mode='prepare', loadpath=None, wordforms=None, simcsv=None):
         """
         Initiates a lemmatization model. The model will use dirpath as a directory to store temporary files as well as
         the path for exporting or loading itself. If loadpath is given, files will be load from this path instead.
@@ -47,6 +47,7 @@ class Pseudolemmatizer:
         :param simcsv: Optional path to precalculated similarities used for graph construction.
         """
 
+        self.name = name
         self.state = -1
         self.G = nx.Graph()
         self.communities = []
@@ -89,17 +90,17 @@ class Pseudolemmatizer:
         :param loadpath: The path from where to load the files, if not identical to the model's dirpath.
         """
 
-        print(self.date() + ' PL: Loading model...')
+        print(self.date() + ' PL-'+self.name+f': Loading model...')
         if full:
             if loadpath is not None:
                 shutil.copy(os.path.join(loadpath, 'wordgroups.json'), os.path.join(self.dirpath, 'wordgroups.json'))
-            print(self.date() + ' PL: ...importing word groups...')
+            print(self.date() + ' PL-'+self.name+f': ...importing word groups...')
             self.loadcommunities(os.path.join(self.dirpath, 'wordgroups.json'))
         print('...loading model infos...')
         if loadpath is not None:
             shutil.copy(os.path.join(loadpath, 'info.json'), os.path.join(self.dirpath, 'info.json'))
         self.info = readDictFromJson(os.path.join(self.dirpath, 'info.json'))
-        print(self.date() + ' PL: ...loading words...')
+        print(self.date() + ' PL-'+self.name+f': ...loading words...')
         if loadpath is not None:
             shutil.copy(os.path.join(loadpath, 'words.json'), os.path.join(self.dirpath, 'words.json'))
         words = readDictFromJson(os.path.join(self.dirpath, 'words.json'))
@@ -109,7 +110,7 @@ class Pseudolemmatizer:
         else:
             self.lemmas = [None for i in range(len(self.forms))]
         del words
-        print(self.date() + ' PL: ...loading graph...')
+        print(self.date() + ' PL-'+self.name+f': ...loading graph...')
         if loadpath is not None:
             shutil.copy(os.path.join(loadpath, 'graph.pickle'), os.path.join(self.dirpath, 'graph.pickle'))
         with open(os.path.join(self.dirpath, 'graph.pickle'), 'rb') as gp:
@@ -118,7 +119,7 @@ class Pseudolemmatizer:
             self.state = 1
         else:
             self.state = 0
-        print(self.date() + ' PL: Done.')
+        print(self.date() + ' PL-'+self.name+f': Done.')
 
     def loadcommunities(self, wgpath):
         """
@@ -159,8 +160,8 @@ class Pseudolemmatizer:
         contain the wordforms, not the corresponding lemmata.
         """
 
-        print(self.date() + ' PL: Exporting model...')
-        print(self.date() + ' PL: ...exporting words...')
+        print(self.date() + ' PL-'+self.name+f': Exporting model...')
+        print(self.date() + ' PL-'+self.name+f': ...exporting words...')
         if self.state == 1:
             words = {
                 'forms': self.forms,
@@ -174,22 +175,22 @@ class Pseudolemmatizer:
         gc.collect()
 
         if self.state == -1:
-            print(self.date() + ' PL: Model is untrained. Nothing else to export.')
+            print(self.date() + ' PL-'+self.name+f': Model is untrained. Nothing else to export.')
             return
         if self.state == 1:
-            print(self.date() + ' PL: ...exporting word groups...')
+            print(self.date() + ' PL-'+self.name+f': ...exporting word groups...')
             saveDictAsJson(os.path.join(self.dirpath, 'wordgroups.json'), self.formatcommunities())
             gc.collect()
         print('...exporting model infos...')
         saveDictAsJson(os.path.join(self.dirpath, 'info.json'), self.info)
-        print(self.date() + ' PL: ...exporting human-readable graph...')
+        print(self.date() + ' PL-'+self.name+f': ...exporting human-readable graph...')
         saveDictAsJson(os.path.join(self.dirpath, 'graph.json'),
                        nx.node_link_data(self.G, link='edges', source='w1', target='w2'))
         gc.collect()
-        print(self.date() + ' PL: ...serializing graph...')
+        print(self.date() + ' PL-'+self.name+f': ...serializing graph...')
         with open(os.path.join(self.dirpath, 'graph.pickle'), 'wb') as gp:
             pickle.dump(self.G, gp, pickle.HIGHEST_PROTOCOL)
-        print(self.date() + ' PL: Done.')
+        print(self.date() + ' PL-'+self.name+f': Done.')
 
     def formatcommunities(self):
         """
@@ -220,7 +221,7 @@ class Pseudolemmatizer:
         :param simcsv: Optional path to precalculated similarities used for graph construction.
         """
 
-        print(self.date() + ' PL: Preparing model.')
+        print(self.date() + ' PL-'+self.name+f': Preparing model.')
         i = 0
         self.info['simconf'] = {
             'SM': smcustomization if smcustomization is not None else {},
@@ -231,12 +232,12 @@ class Pseudolemmatizer:
             'disfavor': disfavor
         }
 
-        print(self.date() + ' PL: Adding words as nodes.')
+        print(self.date() + ' PL-'+self.name+f': Adding words as nodes.')
         for word in self.forms:
             self.G.add_node(i, wf=word)
             i += 1
 
-        print(self.date() + ' PL: Calculating similarities and adding them as edges.')
+        print(self.date() + ' PL-'+self.name+f': Calculating similarities and adding them as edges.')
 
         if simcsv is None:
             self.__calculateSimsAllThread(smcustomization=smcustomization, gapex=gapex, gapstart=gapstart,
@@ -245,7 +246,7 @@ class Pseudolemmatizer:
             self.readSims(os.path.join(self.dirpath, simcsv))
 
         self.state = 0
-        print(self.date() + ' PL: Preparation finished:')
+        print(self.date() + ' PL-'+self.name+f': Preparation finished:')
         self.info['nodes'] = self.G.number_of_nodes()
         self.info['edges'] = self.G.number_of_edges()
         print('Nodes: ' + str(self.info['nodes']))
@@ -259,7 +260,7 @@ class Pseudolemmatizer:
         The similarities are saved as csv file in the dirpath of the lemmatizer object.
         """
 
-        print(self.date() + ' PL: Calculating batches for calculation')
+        print(self.date() + ' PL-'+self.name+f': Calculating batches for calculation')
         pno = len(psutil.Process().cpu_affinity())
         batches = [(i, len(self.forms) - i) for i in range(len(self.forms))]
         full = int(((len(self.forms) + 1) * len(self.forms)) / 2)
@@ -288,11 +289,11 @@ class Pseudolemmatizer:
 
         partitions[-1].extend([i[0] for i in batches])
         counts[-1] += sum([i[1] for i in batches])
-        print(self.date() + ' PL: Created '+str(pno)+' batches with quantity:')
+        print(self.date() + ' PL-'+self.name+f': Created '+str(pno)+' batches with quantity:')
         print(counts)
 
         # Start threads
-        print(self.date() + ' PL: Starting subprocesses.')
+        print(self.date() + ' PL-'+self.name+f': Starting subprocesses.')
         tmppath = os.path.join(self.dirpath, 'tmp')
         os.mkdir(tmppath)
         processes = []
@@ -309,14 +310,14 @@ class Pseudolemmatizer:
         for p in processes:
             p.join()
 
-        print(self.date() + ' PL: Adding edges.')
+        print(self.date() + ' PL-'+self.name+f': Adding edges.')
         for p in range(pno):
             gc.collect()
             edges = q.get()
             for edge in edges:
                 self.G.add_edge(edge[0], edge[1], weight=edge[2])
 
-        print(self.date() + ' PL: Joining similarity CSVs.')
+        print(self.date() + ' PL-'+self.name+f': Joining similarity CSVs.')
         with open(self.csvpath, 'wb') as ff:
             for p in range(1, pno+1):
                 f = os.path.join(tmppath, str(p) + '-' + str(pno) + '.csv')
@@ -331,7 +332,7 @@ class Pseudolemmatizer:
             SM = None
         else:
             SM = constructSMfromDict(smcustomization)
-        print(self.date() + ' PL-' + name + ': Calculating similarities for word pair 1 of ' + str(full))
+        print(self.date() + ' PL-'+self.name+f'-' + name + ': Calculating similarities for word pair 1 of ' + str(full))
         step = int((10 ** (int(math.log10(full)))) / 2)
         no = 1
         nextno = 10
@@ -343,7 +344,7 @@ class Pseudolemmatizer:
             for i in idxes:
                 for j in range(i, len(words)):
                     if no == nextno:
-                        print(self.date() + ' PL-' + name + ':... for word pair ' + str(nextno) + ' of ' + str(full))
+                        print(self.date() + ' PL-'+self.name+f'-' + name + ':... for word pair ' + str(nextno) + ' of ' + str(full))
                         if nextno < step:
                             nextno = nextno * 10
                         else:
@@ -352,7 +353,7 @@ class Pseudolemmatizer:
                         for s in sims:
                             csv.write(s)
                         sims = []
-                        print(self.date() + ' PL-' + name + ':... written up to ' + str(no-1) + ' to csv.')
+                        print(self.date() + ' PL-'+self.name+f'-' + name + ':... written up to ' + str(no-1) + ' to csv.')
                         gc.collect()
                     sim = newu(words[i], words[j], SM=SM, gapex=gapex, gapstart=gapstart,
                                phonetic=phonetic, disfavor=disfavor, combilists=combilists)
@@ -364,7 +365,7 @@ class Pseudolemmatizer:
             for s in sims:
                 csv.write(s)
             te = time.time()
-        print(self.date() + ' PL-' + name + ': Done in '+time.strftime('%H:%M:%S', time.gmtime(te-ts))+'.')
+        print(self.date() + ' PL-'+self.name+f'-' + name + ': Done in '+time.strftime('%H:%M:%S', time.gmtime(te-ts))+'.')
         q.put_nowait(edges)
 
     def train(self, algo='louvain', resolution=1, enforcequality=True):
@@ -389,17 +390,17 @@ class Pseudolemmatizer:
         :param enforcequality: Whether or not to train iteratively, favouring fully connected communities.
         """
 
-        print(self.date() + ' PL: Training started.')
-        print(self.date() + ' PL: Calculating communities using ' + algo + ' algorithm...')
+        print(self.date() + ' PL-'+self.name+f': Training started.')
+        print(self.date() + ' PL-'+self.name+f': Calculating communities using ' + algo + ' algorithm...')
 
         communities = self.detectCommunities(
             self.G,
             algo=algo,
             resolution=resolution
         )
-        print(self.date() + ' PL: Done.')
+        print(self.date() + ' PL-'+self.name+f': Done.')
         if enforcequality:
-            print(self.date() + ' PL: Checking quality of the detected communities.')
+            print(self.date() + ' PL-'+self.name+f': Checking quality of the detected communities.')
             coverage = 0
             oldcov = 0
             it = 1
@@ -413,7 +414,7 @@ class Pseudolemmatizer:
                         coverage += len(communities[comi][2])
                 self.communities.extend(self.assignRepresentative(communities))
                 if coverage == oldcov:
-                    print(self.date() + ' PL: Community detection converges.')
+                    print(self.date() + ' PL-'+self.name+f': Community detection converges.')
                     self.info['comno'] = len(self.communities) + len(weakcomms)
                     self.info['weakcomno'] = len(weakcomms)
                     self.communities.extend(self.assignRepresentative(weakcomms))
@@ -421,7 +422,7 @@ class Pseudolemmatizer:
                 communities = []
                 gc.collect()
                 print(self.date() +
-                      f' PL: Covered {coverage} of {len(self.forms)} wordforms. Starting iteration no. {it}.')
+                      f' PL-'+self.name+f': Covered {coverage} of {len(self.forms)} wordforms. Starting iteration no. {it}.')
                 for wcom in weakcomms:
                     communities.extend(self.detectCommunities(
                         nx.Graph(nx.subgraph(self.G, wcom[2])),
@@ -434,12 +435,12 @@ class Pseudolemmatizer:
             self.communities.extend(self.assignRepresentative(communities))
             self.info['comno'] = len(self.communities)
 
-        print(self.date() + ' PL: Assigning lemmata.')
+        print(self.date() + ' PL-'+self.name+f': Assigning lemmata.')
         self.assignLemmata()
 
         self.info['lemmacount'] = len(set(self.lemmas))
 
-        print(self.date() + ' PL: Training finished: '+ str(self.info['lemmacount']) + ' unique lemmata.')
+        print(self.date() + ' PL-'+self.name+f': Training finished: '+ str(self.info['lemmacount']) + ' unique lemmata.')
 
         self.state = 1
 
