@@ -322,9 +322,8 @@ class TextSegmenter:
 
         fulltext = fulltext.replace('-', '')
         fulltext = self.TC.joinlineends(fulltext)
-        # Todo? docid for joinlineends?
         fulltext = fulltext.strip()
         pages.pop('0')
         parts.pop('0')
         saveDictAsJson(outputfolder + os.sep + title + '_index.json', {'parts': parts, 'pages': pages})
-        writeTextToFile(outputfolder + os.sep + title + '_fulltext.txt', fulltext)
+        writeTextToFile(outputfolder + os.sep + title + '.txt', fulltext)

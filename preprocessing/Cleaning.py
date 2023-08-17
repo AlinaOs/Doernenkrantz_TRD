@@ -303,14 +303,14 @@ class TextCleaner:
                             j = True if noj > (nosep1 + nosep2)/2 else False
 
             if j:
-                text = text.replace(c, joined)
+                text = re.sub(r'(?<!\w)'+c+r'(?!\w)', joined, text)
                 self.vocab.addWord(joined.lower(), docid)
                 if invocab:
                     self.vocab.removeWord(nosep1, docid)
                     self.vocab.removeWord(nosep2, docid)
 
             else:
-                text = text.replace(c, ' '.join(separated))
+                text = re.sub(r'(?<!\w)'+c+r'(?!\w)', ' '.join(separated), text)
                 if not invocab:
                     self.vocab.addWord(separated[0].lower(), docid)
                     self.vocab.addWord(separated[1].lower(), docid)
