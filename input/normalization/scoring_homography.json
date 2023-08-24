@@ -1,0 +1,8 @@
+{
+  "name": "homographic",
+  "pairscores": {
+    "1": [["i", "j"], ["i", "y"], ["j", "y"], ["c", "k"], ["c", "z"], ["u", "v"], ["f", "v"], ["f", "u"]]
+  },
+  "doublescores": {
+  }
+}

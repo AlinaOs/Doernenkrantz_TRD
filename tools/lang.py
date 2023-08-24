@@ -1,5 +1,6 @@
 import gc
 import math
+import re
 import string
 import numpy as np
 from tools.rw import readDictFromJson, saveDictAsJson, readFromCSV
@@ -324,6 +325,13 @@ def constructSMfromDict(smdict: dict):
                     SM[string.ascii_lowercase.index(ll), string.ascii_lowercase.index(l)] = score
     return ScoringMatrix(smdict['name'], SM)
 
+
+def isNumber(text):
+    if re.fullmatch(r'[ijvxlcdmIJVXLCDM]+', text):
+        if re.fullmatch(r'[vV][ij]{1,2}ll?', text) or re.match(r'[ijIJ]{1,2}m', text):
+            return False
+        return True
+    return False
 
 # Function used after kind hint from Kelly Bundy at https://stackoverflow.com/a/76599108
 def key(s, t):
