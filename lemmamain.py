@@ -10,7 +10,7 @@ def date():
 
 
 if __name__ == '__main__':
-
+    
     print(date() + ' MAIN: Training a model on unnormalized text using Louvain: LOV-UN.')
     PL_UN = Pseudolemmatizer(dirpath='input/lemmamodels/lov-unnorm', name='LOV-UN', mode='loadbase')
     print(date() + ' MAIN: Refiltering edges.')
@@ -52,6 +52,20 @@ if __name__ == '__main__':
     print(date() + ' MAIN: Assigning Lemmata.')
     PL_NF.assignLemmata()
     PL_NF.export()
+
+    print(date() + ' MAIN: Fine-tuning LOV-UN using ReN.')
+    PL_UN_ReN = Pseudolemmatizer(dirpath='input/lemmamodels/lov-unnorm-ren', name='LOV-UN-ReN', mode='load',
+                                 loadpath='input/lemmamodels/lov-unnorm')
+    print(date() + ' MAIN: Loading ReN data.')
+    lemmamap = readDictFromJson('input/normalization/ReN_forms.json')
+    lemmata = list(readDictFromJson('input/normalization/ReN_Lemmata.json').keys())
+    PL_UN_ReN.finetuneWordgroups()
+    print(date() + ' MAIN: Joining lone words according to ReN.')
+    PL_UN_ReN.joinLoneWords(lemmamap, lemmata)
+    print(date() + ' MAIN: Joining wordgroups according to ReN.')
+    PL_UN_ReN.joinWordgroups(lemmamap, lemmata)
+    PL_UN_ReN.assignLemmata()
+    PL_UN_ReN.export()
 
     '''
     # Test run

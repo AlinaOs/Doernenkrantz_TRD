@@ -4,6 +4,8 @@ import gc
 import os
 import pickle
 import shutil
+from collections import Counter
+
 import psutil
 import copy
 import math
@@ -47,6 +49,7 @@ class Pseudolemmatizer:
         :param simcsv: Optional path to precalculated similarities used for graph construction.
         """
 
+        self.lonewords = []
         self.dirpath = dirpath
         self.csvpath = os.path.join(dirpath, 'sims-all.csv')
         self.info = {}
@@ -719,18 +722,25 @@ class Pseudolemmatizer:
                 communities[ci]['lemma'] = forms[wordsidxs[0]]
                 continue
             SG = nx.Graph(nx.subgraph(G, wordsidxs))
-            wordsims = [(SG.degree(n, weight='weight') / SG.degree(n)) * (len(wordsidxs) - 1) for n in wordsidxs]
-            maxsim = max(wordsims)
-            maxnodes = [i for i in range(len(wordsims)) if wordsims[i] == maxsim]
-            if len(maxnodes) == 1:
-                lemma = forms[wordsidxs[maxnodes[0]]]
-            else:
+            nonzerowidxs = [n for n in wordsidxs if SG.degree(n) > 0]
+            if len(nonzerowidxs) == 0:
                 words = [forms[w] for w in wordsidxs]
                 meanlength = communities[ci].get('meanlen',  sum(map(len, words)) / len(words))
+                lemma = words[min(range(len(words)),
+                                  key=lambda i: abs(len(words[i]) - meanlength))]
+            else:
+                wordsims = [(SG.degree(n, weight='weight') / SG.degree(n)) * (len(wordsidxs) - 1) for n in nonzerowidxs]
+                maxsim = max(wordsims)
+                maxnodes = [i for i in range(len(wordsims)) if wordsims[i] == maxsim]
+                if len(maxnodes) == 1:
+                    lemma = forms[nonzerowidxs[maxnodes[0]]]
+                else:
+                    words = [forms[w] for w in wordsidxs]
+                    meanlength = communities[ci].get('meanlen',  sum(map(len, words)) / len(words))
 
-                # https://stackoverflow.com/a/9706105/14393183
-                lemma = words[min(range(len(maxnodes)),
-                                  key=lambda i: abs(len(forms[wordsidxs[maxnodes[i]]]) - meanlength))]
+                    # https://stackoverflow.com/a/9706105/14393183
+                    lemma = words[min(range(len(maxnodes)),
+                                      key=lambda i: abs(len(forms[nonzerowidxs[maxnodes[i]]]) - meanlength))]
             communities[ci]['lemma'] = lemma
         return communities
 
@@ -802,12 +812,168 @@ class Pseudolemmatizer:
 
     def finetuneWordgroups(self):
         self.wordgroups = []
+        self.lonewords = []
         for com in self.communities:
+            if len(com['words']) == 1:
+                self.lonewords.extend(com['words'])
+                continue
             if com['meansim'] >= 0.7 and com['meanlen'] > 3.0:
                 self.wordgroups.append(com)
             elif com['meansim'] == 1.0 and com['meanlen'] <= 3.0:
                 self.wordgroups.append(com)
         self.info['wgno'] = len(self.wordgroups)
+        self.info['lwno'] = len(self.lonewords)
+
+    def joinWordgroups(self, lemmamap:dict, lemmata:list, exportdocu=True):
+        """
+        Joins wordgroups according to an external reference containing a mapping for wordforms and their corresponding
+        lemmata. Wordgroups are joined, if they contain wordforms of the same lemma. If a wordgroup contains forms of
+        more than one lemma, it is not joined.
+
+        :param lemmamap: A dictionary mapping wordforms as keys to the corresponding lemmata as string-values.
+        :param lemmata: A list containing all lemmata.
+        :param exportdocu: Whether or not to export a documentation about the old and newly joined wordgroups.
+        """
+
+        wgmap = [set() for i in range(len(lemmata))]
+        forms = [[] for i in range(len(lemmata))]
+
+        # Map wordforms and wordgroups to lemmata
+        for i in range(len(self.wordgroups)):
+            wg = self.wordgroups[i]
+            for wi in wg['words']:
+                w = self.forms[wi]
+                if w in lemmamap.keys():
+                    lemidx = lemmata.index(lemmamap[w])
+                    wgmap[lemidx].add(i)
+                    forms[lemidx].append(w)
+        # Find lemmata present in more than one wordgroup
+        joincandidates = [(wgmap[i], forms[i], lemmata[i]) for i in range(len(wgmap)) if len(wgmap[i]) > 1]
+
+        # Check for ambigue wordgroups containing forms of more than one lemma. Remove all ambigue wordgroups from the
+        # candidates
+        impactedwgs = []
+        for jc in joincandidates:
+            impactedwgs.extend(jc[0])
+        counts = {}
+        for i in impactedwgs:
+            counts[i] = counts.get(i, 0) + 1
+        ambiguewgs = [k for k in counts.keys() if counts[k] > 1]
+        discardcandidates = []
+        for i in range(len(joincandidates)):
+            discardwgs = []
+            for wg in joincandidates[i][0]:
+                if wg in ambiguewgs:
+                    discardwgs.append(wg)
+            if len(joincandidates[i][0]) - len(discardwgs) < 2:
+                discardcandidates.append(i)
+                continue
+            newwgs = joincandidates[i][0]
+            for wg in discardwgs:
+                newwgs.remove(wg)
+            joincandidates[i] = (newwgs, joincandidates[i][1], joincandidates[i][2])
+        for dis in sorted(discardcandidates, reverse=True):
+            del joincandidates[dis]
+        for jc in joincandidates:
+            impactedwgs.extend(jc[0])
+
+        # Join wordgroups
+        wgno = 0
+        nwgs = []
+        discard = []
+        docu = []
+        for d in joincandidates:
+            impactedwgs.extend(d[0])
+            wgno += len(d[0])
+            words = []
+            rep = ''
+            wglen = 0
+            simtotal = 0
+            wcount = 0
+            for wg in d[0]:
+                discard.append(wg)
+                wlen = len(self.wordgroups[wg]['words'])
+                wcount += wlen
+                simtotal += self.wordgroups[wg]['meansim']
+                words.extend(self.wordgroups[wg]['words'])
+                if wlen > wglen:
+                    wglen = wlen
+                    rep = self.wordgroups[wg]['lemma']
+            joinedwg = {
+                'meansim': simtotal/len(d[0]),
+                'density': self.evaluatecommunity(words),
+                'words': words,
+                'lemma': rep
+            }
+            nwgs.append(joinedwg)
+            docu.append({
+                'lemma': d[2],
+                'old': self.formatcommunities([self.wordgroups[wgi] for wgi in d[0]]),
+                'new': self.formatcommunities([joinedwg])[0]
+            })
+        nwgs = self.calculateAverageWordLength(nwgs)
+
+        # Remove old wordgroups and add new, joined wordgroups
+        for dis in sorted(discard, reverse=True):
+            del self.wordgroups[dis]
+        self.wordgroups.extend(nwgs)
+        self.info['wgno'] = len(self.wordgroups)
+        print(self.date() + ' PL-' + self.name +
+              f': Joined {len(impactedwgs)} wordgroups into {len(nwgs)} new wordgroups.')
+
+        if exportdocu is not None:
+            print(self.date() + ' PL-' + self.name + f': Exporting documentation of the performed joins.')
+            saveDictAsJson(os.path.join(self.dirpath, 'joinedWGs.json'), docu)
+
+    def joinLoneWords(self, lemmamap:dict, lemmata:list, exportdocu=True):
+        """
+        Joins wordgroups according to an external reference containing a mapping for wordforms and their corresponding
+        lemmata. Wordgroups are joined, if they contain wordforms of the same lemma. If a wordgroup contains forms of
+        more than one lemma, it is not joined.
+
+        :param lemmamap: A dictionary mapping wordforms as keys to the corresponding lemmata as string-values.
+        :param lemmata: A list containing all lemmata.
+        :param exportdocu: Whether or not to export a documentation about the old and newly joined wordgroups.
+        """
+
+        wmap = [set() for i in range(len(lemmata))]
+
+        # Map word forms to lemmata
+        for wi in self.lonewords:
+            w = self.forms[wi]
+            if w in lemmamap.keys():
+                lemidx = lemmata.index(lemmamap[w])
+                wmap[lemidx].add(wi)
+
+        # Find lemmata with two or more word forms in the model
+        joincandidates = [(list(wmap[i]), lemmata[i]) for i in range(len(wmap)) if len(wmap[i]) > 1]
+
+        # Join words to new wordgroup
+        wordforms = []
+        nwgs = []
+        for d in joincandidates:
+            wordforms.extend(d[0])
+            joinedwg = {
+                'density': self.evaluatecommunity(d[0]),
+                'words': d[0]
+            }
+            nwgs.append(joinedwg)
+        nwgs = self.calculateMeansim(nwgs)
+        nwgs = self.calculateAverageWordLength(nwgs)
+        nwgs = self.assignRepresentative(nwgs)
+
+        # Remove words from lonewords list and add new, joined wordgroups
+        for dis in sorted(wordforms, reverse=True):
+            self.lonewords.remove(dis)
+        self.wordgroups.extend(nwgs)
+        self.info['wgno'] = len(self.wordgroups)
+        self.info['lwno'] = len(self.lonewords)
+        print(self.date() + ' PL-' + self.name +
+              f': Joined {len(wordforms)} words into {len(nwgs)} new wordgroups.')
+
+        if exportdocu is not None:
+            print(self.date() + ' PL-' + self.name + f': Exporting documentation of the performed joins.')
+            saveDictAsJson(os.path.join(self.dirpath, 'joinedLWs.json'), self.formatcommunities(nwgs))
 
     def refilterEdges(self, minsim, minlength, G:nx.Graph=None, forms=None, updateinfo = True):
         if G is None:
