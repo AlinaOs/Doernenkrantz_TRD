@@ -117,7 +117,8 @@ class TextSegmenter:
 
                 words = sent.split()
                 if pendingsent is not None:
-                    if pendingsent[0].endswith('-'):
+                    #if pendingsent[0].endswith('-'):
+                    if pendingsent[0].endswith('='):
                         # syllabification is indicated by a dash
                         sent = pendingsent[0].strip()[0:-5] + '' + sent
                     elif pendingsent[0].endswith('#lb#'):
@@ -229,7 +230,7 @@ class TextSegmenter:
             words = text.split()
 
             if pendinggram is not None:
-                if pendinggram[0][-1].endswith('-'):
+                if pendinggram[0][-1].endswith('='):
                     # syllabification is indicated by a dash
                     gwords = list(pendinggram[0])
                     gwords[-1] = pendinggram[0][-1][:-1] + words.pop(0)
@@ -286,12 +287,10 @@ class TextSegmenter:
         n_grams.extend(self.ngramsToList(parNgrams))
         writeToCSV(output, n_grams, header=csv['header'])
 
-        #TODO insertion for Ngrams?
-
-    def getFullText(self, innput, outputfolder, title):
+    def getFullText(self, innput, outputfolder, title, joinlineends=False):
         csv = readFromCSV(innput)
 
-        fulltext = ''
+        fulltext = []
         pages = {}
         parts = {}
         currentIndex = -1
@@ -316,11 +315,16 @@ class TextSegmenter:
             text = re.sub(r'\s*(?:#SEND#|#CSTART#|#INSTART#|#INEND#)\s*', ' ', text)
             text = re.sub(r'\s+', ' ', text)
             text = text.strip()
-            fulltext += text
+            fulltext.append(text)
 
             currentIndex += len(text)
 
-        fulltext = fulltext.replace('-', '')
+        if joinlineends:
+            fulltext = ''.join(fulltext)
+        else:
+            fulltext = ' '.join(fulltext)
+        fulltext = fulltext.replace('=', '')
+        fulltext = re.sub(r'\s+', ' ', fulltext)
         fulltext = self.TC.joinlineends(fulltext)
         fulltext = fulltext.strip()
         pages.pop('0')

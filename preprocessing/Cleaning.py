@@ -1,12 +1,11 @@
+import datetime
+import os.path
 import re
 from tools.rw import *
-from tools.lang import Dictionary
-from py3langid.langid import LanguageIdentifier, MODEL_FILE
+from tools.lang import Dictionary, isNumber
 
 
 class TextCleaner:
-    lidentifier = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
-    lidentifier.set_languages(['la', 'de'])
     standardCSnorm = []
     standardLCnorm = []
     prefixes = []
@@ -25,52 +24,83 @@ class TextCleaner:
         self.prefixes = readDictFromCSV(prefixes) if prefixes is not None else []
         self.vocab = vocab
 
-    def cleanTextFromCSV(self, input, output, normalize=True, lowercase=False, addnorm=None, docid=None):
-        csv = readFromCSV(input)
+    def cleanTextFromMultiCSV(self, files: list, outdir, normalize=True, joinpbs: list = None,
+                              lowercase=False, addnorms: list = None, docids: list = None):
+        if addnorms is None:
+            addnorms = [None for i in range(len(files))]
+        if docids is None:
+            docids = [None for i in range(len(files))]
+        if joinpbs is None:
+            joinpbs = [True for i in range(len(files))]
+
+        csvall = []
+        for fi in range(len(files)):
+            csv = readFromCSV(files[fi])
+            csvall.append(csv)
+
+        for fi in range(len(files)):
+            print(datetime.datetime.now().strftime('%Y-%m-%d %X') + ' TextCleaner: Cleaning '
+                  + os.path.basename(files[fi]) + '.')
+            csvall[fi]['lines'] = self.cleanLines(csvall[fi]['lines'], joinlineends=False, joinprefixes=False,
+                                                  normalize=normalize,
+                                                  lowercase=lowercase, addnorm=addnorms[fi], docid=docids[fi])
+
+        print(datetime.datetime.now().strftime('%Y-%m-%d %X') + ' TextCleaner: Joining line-ends and prefixes.')
+        for fi in range(len(files)):
+            lines = csvall[fi]['lines']
+            delete = []
+            for i in range(len(lines)):
+                l = lines[i]
+                l[0] = self.joinlineends(l[0], docids[fi])
+                if normalize:
+                    l[0] = self.joinprefixes(l[0], docids[fi])
+                    l[0] = l[0].strip()
+                if l[0] == '':
+                    delete.append(i)
+            for i in sorted(delete, reverse=True):
+                lines.pop(i)
+
+        print(datetime.datetime.now().strftime('%Y-%m-%d %X') + ' TextCleaner: Joining words broken over two pages.')
+        for fi in range(len(files)):
+            if joinpbs[fi]:
+                csvall[fi]['lines'] = self.joinPagebrokenWords(csvall[fi]['lines'], normalize=normalize,
+                                                            lowercase=lowercase, addnorm=addnorms[fi], docid=docids[fi])
+            else:
+                for l in csvall[fi]['lines']:
+                    if l[0].endswith('#lb#'):
+                        l[0] = l[0][0:-4]
+
+            writeToCSV(os.path.join(outdir, os.path.basename(files[fi])),
+                       csvall[fi]['lines'], header=csvall[fi]['header'])
+
+    def cleanTextFromCSV(self, innput, output, normalize=True, lowercase=False, addnorm=None, docid=None):
+        csv = readFromCSV(innput)
+        self.cleanLines(csv['lines'], joinlineends=True, joinprefixes=normalize, normalize=normalize,
+                        lowercase=lowercase, addnorm=addnorm, docid=docid)
+        # Join words hyphenated over two pages
+        csv['lines'] = self.joinPagebrokenWords(csv['lines'], normalize=normalize, lowercase=lowercase, addnorm=addnorm,
+                                                docid=docid)
+        writeToCSV(output, csv['lines'], header=csv['header'])
+
+    def cleanLines(self, lines: list, joinlineends=True, joinprefixes=True, normalize=True, lowercase=False,
+                   addnorm=None, docid=None):
         if addnorm is not None:
             addnorm = readDictFromCSV(addnorm)
         delete = []
-        for i in range(len(csv['lines'])):
-            l = csv['lines'][i]
+        for i in range(len(lines)):
+            l = lines[i]
             l[0] = self.cleanText(l[0], normalize, lowercase, addnorm, docid)
-            l[0] = self.joinlineends(l[0], docid)
-            if normalize:
+            if joinlineends:
+                l[0] = self.joinlineends(l[0], docid)
+            if joinprefixes:
                 l[0] = self.joinprefixes(l[0], docid)
+            if normalize:
                 l[0] = l[0].strip()
             if l[0] == '':
                 delete.append(i)
         for i in sorted(delete, reverse=True):
-            csv['lines'].pop(i)
-            
-        # Join words hyphenated over two pages
-        brokenword = False
-        for i in range(len(csv['lines'])):
-            if brokenword:
-                tokens = csv['lines'][i][0].split()
-                csv['lines'][i - 1][0] = ''.join([csv['lines'][i - 1][0], tokens[0]])
-                self.vocab.removeWord(
-                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
-                    re.sub(r'\w+#lb#$', '',
-                          re.sub(r'\w+#lb#\w+', '', tokens[0]))), docid)
-                tokens.pop(0)
-                csv['lines'][i][0] = ' '.join(tokens)
-                lasttokens = csv['lines'][i - 1][0].split()
-                lasttokens[-1] = self.cleanText(lasttokens[-1], normalize, lowercase, addnorm, docid)
-                self.vocab.addWord(
-                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
-                           re.sub(r'\w+#lb#$', '',
-                                  re.sub(r'\w+#lb#\w+', '', lasttokens[-1]))), docid)
-                brokenword = False
-            if csv['lines'][i][0].strip().endswith('-'):
-                brokenword = True
-                tokens = csv['lines'][i][0].split()
-                self.vocab.removeWord(
-                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
-                    re.sub(r'\w+#lb#$', '',
-                          re.sub(r'\w+#lb#\w+', '', tokens[-1]))), docid)
-                csv['lines'][i][0] = csv['lines'][i][0].replace('-', '')
-
-        writeToCSV(output, csv['lines'], header=csv['header'])
+            lines.pop(i)
+        return lines
 
     def cleanText(self, text: str, normalize=True, lowercase=False, addnorm=None, docid=None):
         """
@@ -90,7 +120,7 @@ class TextCleaner:
 
         # insert space between small letter and big letter
         for m in re.findall(r'[a-zßöů][A-Z]', text):
-            text = text.replace(m, m[0]+' '+m[1])
+            text = text.replace(m, m[0] + ' ' + m[1])
 
         # Delete whitespaces, where the following token is a single word character and therefore most likely
         # cut off from the previous token due to OCR problems or poor print quality.
@@ -152,7 +182,8 @@ class TextCleaner:
         self.vocab.updateDict(
             re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', ' ',
                    re.sub(r'\w+#lb#$', '',
-                          re.sub(r'\w+#lb#\w+', '', text))), docid
+                          re.sub(r'\w+=$', '',
+                                 re.sub(r'\w+#lb#\w+', '', text)))), docid
         )
 
         return text
@@ -182,7 +213,7 @@ class TextCleaner:
         for pre in self.prefixes:
             candidates = re.findall(pre['regex'], text)
             if len(candidates) > 0:
-                text = self.joinwords(text, candidates, ' ', invocab=True, joinright=True, docid=docid)
+                text = self.joinwords(text, candidates, ' ', invocab1=True, invocab2=True, joinright=True, docid=docid)
         return text
 
     def joinlineends(self, text, docid=None):
@@ -209,7 +240,62 @@ class TextCleaner:
         text = re.sub(r'\s+', ' ', text)
         return text
 
-    def joinwords(self, text, candidates, separator, joinright=False, invocab=False, docid=None):
+    def joinPagebrokenWords(self, lines, normalize=True, lowercase=False, addnorm=None, docid=None):
+        # Join words hyphenated or broken over two pages
+        brokenword = False
+        checkword = True
+        for i in range(len(lines)):
+            if brokenword:
+                tokens = lines[i][0].split()
+                lines[i - 1][0] = ''.join([lines[i - 1][0], tokens[0]])
+                self.vocab.removeWord(
+                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
+                           re.sub(r'\w+#lb#$', '',
+                                  re.sub(r'\w+#lb#\w+', '', tokens[0]))), docid)
+                tokens.pop(0)
+                lines[i][0] = ' '.join(tokens)
+                lasttokens = lines[i - 1][0].split()
+                lasttokens[-1] = self.cleanText(lasttokens[-1], normalize, lowercase, addnorm, docid)
+                self.vocab.addWord(
+                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
+                           re.sub(r'\w+#lb#$', '',
+                                  re.sub(r'\w+#lb#\w+', '', lasttokens[-1]))), docid)
+            elif checkword and \
+                    lines[i][1] == lines[i - 1][1] and \
+                    lines[i][2] == lines[i - 1][2] and \
+                    not lines[i][0].startswith('#'):
+                tokens = lines[i][0].split()
+                lasttokens = lines[i - 1][0].split()
+                text = lasttokens[-1] + tokens[0]
+                checked = self.joinwords(text, [text], '#lb#', invocab1=False, invocab2=True,
+                                         updatedict=True, docid=docid)
+                if checked.find(' ') == -1:
+                    lasttokens.pop(-1)
+                    lasttokens.append(checked)
+                    lines[i][0] = ' '.join(tokens[1:])
+                    lines[i - 1][0] = ' '.join(lasttokens)
+
+            if i > 0 and lines[i - 1][0].endswith('#lb#'):
+                lines[i - 1][0] = lines[i - 1][0][0:-4]
+
+            brokenword = False
+            checkword = False
+
+            if lines[i][0].strip().endswith('='):
+                brokenword = True
+                tokens = lines[i][0].split()
+                self.vocab.removeWord(
+                    re.sub('#SEND#|#CSTART#|#INSTART#|#INEND#|#lb#', '',
+                           re.sub(r'\w+#lb#$', '',
+                                  re.sub(r'\w+#lb#\w+', '', tokens[-1]))), docid)
+                lines[i][0] = lines[i][0].replace('=', '')
+            elif lines[i][0].strip().endswith('#lb#') and not lines[i][0].strip().endswith('##lb#'):
+                checkword = True
+
+        return lines
+
+    def joinwords(self, text, candidates, separator, invocab1=False, invocab2=False, updatedict=True,
+                  joinright=False, docid=None):
         """
         Tests whether two tokens (the candidate pair) form one single word and should therefore be joined.
         The algorithm works naively and linguistically uninformed, but is based on the
@@ -220,11 +306,8 @@ class TextCleaner:
         2. not t1 and not t2 and j: join
         3. t1 xor t2 and not j: join, if the non-existing token has 3 or less characters, else separate
         4. t1 xor t2 and j: join, if freq(j) > freq(t), else separate
-        5. t1 and t2 and j: join, if freq(j) > (freq(t1) + freq(t2))/2, else separate
+        5. t1 and t2 and j: join, if freq(j) >=2 or freq(t1) = 1 or freq(t2) = 1, else separate
         6. t1 and t2 and not j: separate
-
-        The performance is circa 40% recall and circa 96-99% precision for token pairs forming
-        a single word.
 
         This behaviour can be changed by setting joinright to True (default: False). Thereby, only the second (i.e., the
         right) token of a candidate pair is crucial in deciding whether to join or not. The candidate pair gets joined
@@ -256,8 +339,9 @@ class TextCleaner:
             nosep1 = self.vocab.getGlobalFrequency(separated[0].lower())
             nosep2 = self.vocab.getGlobalFrequency(separated[1].lower())
 
-            if invocab:
+            if invocab1:
                 nosep1 = nosep1 - 1 if nosep1 and nosep1 - 1 > 0 else False
+            if invocab2:
                 nosep2 = nosep2 - 1 if nosep2 and nosep2 - 1 > 0 else False
 
             if not j:
@@ -275,43 +359,40 @@ class TextCleaner:
                     elif not noj and nosep1 and nosep2:
                         # 6
                         j = False
-                    elif noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
+                    elif noj and ((nosep1 and not nosep2) or (not nosep1 and nosep2)):
                         # 4
-                        septext = separated[0] if nosep1 else separated[1]
-                        lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
-                        if lg[0] == 'la' and lg[1] > 0.8:
+                        if (nosep1 and isNumber(separated[0])) or (nosep2 and isNumber(separated[1])):
                             j = False
                         else:
-                            sep = nosep1 if nosep1 else nosep2
-                            j = True if noj > sep else False
-                    elif not noj and (nosep1 and not nosep2) or (not nosep1 and nosep2):
+                            j = True
+                    elif not noj and ((nosep1 and not nosep2) or (not nosep1 and nosep2)):
                         # 3
-                        septext = separated[0] if nosep1 else separated[1]
-                        lg = self.lidentifier.classify(' '.join([septext for i in range(6)]))
-                        if lg[0] == 'la' and lg[1] > 0.8:
+                        if isNumber(separated[0]) or isNumber(separated[1]):
                             j = False
                         else:
                             sep = separated[0] if nosep2 else separated[1]
-                            j = True if len(sep) <= 3 else False
+                            j = True if len(sep) < 3 else False
                     elif noj and nosep1 and nosep2:
                         # 5
-                        lg1 = self.lidentifier.classify(' '.join([separated[0] for i in range(6)]))
-                        lg2 = self.lidentifier.classify(' '.join([separated[1] for i in range(6)]))
-                        if (lg1[0] == 'la' and lg1[1] > 0.8) or (lg2[0] == 'la' and lg2[1] > 0.8):
+                        if isNumber(separated[0]) or isNumber(separated[1]):
                             j = False
                         else:
-                            j = True if noj > (nosep1 + nosep2)/2 else False
+                            j = True if noj >= 2 or nosep1 == 1 or nosep2 == 1 else False
 
             if j:
-                text = re.sub(r'(?<!\w)'+c+r'(?!\w)', joined, text)
-                self.vocab.addWord(joined.lower(), docid)
-                if invocab:
-                    self.vocab.removeWord(nosep1, docid)
-                    self.vocab.removeWord(nosep2, docid)
-
+                text = re.sub(r'(?<!\w)' + c + r'(?!\w)', joined, text)
+                if updatedict:
+                    self.vocab.addWord(joined.lower(), docid)
+                    if invocab1:
+                        self.vocab.removeWord(nosep1, docid)
+                    if invocab2:
+                        self.vocab.removeWord(nosep2, docid)
             else:
-                text = re.sub(r'(?<!\w)'+c+r'(?!\w)', ' '.join(separated), text)
-                if not invocab:
-                    self.vocab.addWord(separated[0].lower(), docid)
-                    self.vocab.addWord(separated[1].lower(), docid)
+                text = re.sub(r'(?<!\w)' + c + r'(?!\w)', ' '.join(separated), text)
+                if updatedict:
+                    if not invocab1:
+                        self.vocab.addWord(separated[0].lower(), docid)
+                    if not invocab2:
+                        self.vocab.addWord(separated[1].lower(), docid)
+
         return text
