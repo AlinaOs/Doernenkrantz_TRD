@@ -4,8 +4,6 @@ import gc
 import os
 import pickle
 import shutil
-from collections import Counter
-
 import psutil
 import copy
 import math
@@ -264,12 +262,11 @@ class Pseudolemmatizer:
             self.G, simno = self.readSims(os.path.join(self.dirpath, simcsv))
 
         self.state = 0
-        print(self.date() + ' PL-' + self.name + f': Preparation finished:')
         self.info['simno'] = simno
         self.info['nodes'] = self.G.number_of_nodes()
         self.info['edges'] = self.G.number_of_edges()
-        print('Nodes: ' + str(self.info['nodes']))
-        print('Edges: ' + str(self.info['edges']))
+        print(self.date() + ' PL-' + self.name + f': Preparation finished: {self.info["nodes"]} nodes,'
+                                                 f' {self.info["edges"]} edges.')
 
     def __calculateSimsAllThread(self, G: nx.Graph=None, forms=None, csvallpath=None, minsim=0.0,
                                  smcustomization=None, gapex=1.0, gapstart=0.5,
@@ -315,8 +312,7 @@ class Pseudolemmatizer:
 
         partitions[-1].extend([i[0] for i in batches])
         counts[-1] += sum([i[1] for i in batches])
-        print(self.date() + ' PL-' + self.name + f': Created ' + str(pno) + ' batches with quantity:')
-        print(counts)
+        print(self.date() + ' PL-' + self.name + f': Created {pno} batches with quantity: {counts}')
 
         # Start threads
         print(self.date() + ' PL-' + self.name + f': Starting subprocesses.')
