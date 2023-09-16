@@ -1,4 +1,7 @@
 import math
+import os.path
+import re
+
 from tools.rw import *
 
 
@@ -7,6 +10,13 @@ class TextExtractor:
     tei = '{http://www.tei-c.org/ns/1.0}'
     xmlns = '{http://www.w3.org/XML/1998/namespace}'
     ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
+    
+    def __init__(self):
+        self.currPage = 0
+        self.currFol = ''
+        self.currGath = ''
+        self.currGathNo = 0
+        self.opensegs = {}
 
     def joinLines(self, lines, join='#lb#'):
         cleanLines = []
@@ -22,27 +32,57 @@ class TextExtractor:
                     li += self.joinLines([elem.find('./tei:reg', self.ns)], join='')
                 elif elem.tag == self.tei + 'pc' and elem.attrib.get('type') == 'syllabification':
                     # join syllabified words
-                    joiner = ''
+                    joiner = '='
                 elif elem.tag == self.tei + 'figure' or elem.tag == self.tei + 'fw':
                     # ignore figures and form work
                     pass
+                elif elem.tag == self.tei + 'seg' and elem.attrib.get('type') == 'tr':
+                    if elem.attrib.get('next') is None and elem.attrib.get('prev') is None:
+                        segid = elem.attrib.get(self.xmlns + 'id')
+                        seginfo = f'_{segid}'
+                        corresp = elem.attrib.get('corresp')
+                        if corresp is not None:
+                            seginfo += f'_{elem.attrib.get("subtype")}'
+                            seginfo += f'_{corresp.replace("#", "").replace(" ", "&")}'
+                        li += f'$segstart{seginfo}$' + self.joinLines([elem], join='') + f'$segend_{segid}$'
+                    elif elem.attrib.get('next') is not None and elem.attrib.get('prev') is not None:
+                        segid = elem.attrib.get(self.xmlns + 'id')
+                        previd = elem.attrib.get('prev')[1:]
+                        self.opensegs[segid] = self.opensegs[previd]
+                        del self.opensegs[previd]
+                        li += self.joinLines([elem], join='')
+                        if elem.tail is not None:
+                            li += elem.tail
+                    elif elem.attrib.get('prev') is None:
+                        segid = elem.attrib.get(self.xmlns + 'id')
+                        self.opensegs[segid] = segid
+                        seginfo = f'_{segid}'
+                        corresp = elem.attrib.get('corresp')
+                        if corresp is not None:
+                            seginfo += f'_{elem.attrib.get("subtype")}'
+                            seginfo += f'_{corresp.replace("#", "").replace(" ", "&")}'
+                        li += f'$segstart{seginfo}$' + self.joinLines([elem], join='')
+                    elif elem.attrib.get('next') is None:
+                        previd = elem.attrib.get('prev')[1:]
+                        segid = self.opensegs[previd]
+                        li += self.joinLines([elem], join='') + f'$segend_{segid}$'
+                        del self.opensegs[previd]
+                        if elem.tail is not None:
+                            li += elem.tail
                 else:
                     # ignore all other markup (e.g., ex, supplied, hi, etc.) and extract text
-                    if elem.text is not None:
-                        # li += elem.text
-                        li += self.joinLines([elem], join='')
+                    li += self.joinLines([elem], join='')
                     if elem.tail is not None:
                         li += elem.tail
             li = ''.join(li.splitlines())
             if li != '':
-                li = li.strip() + joiner
+                li = li.strip()
+                if not li.endswith('='):
+                    li = li + joiner
                 cleanLines.append(li)
-        return ''.join(cleanLines)
-
-    currPage = 0
-    currFol = ''
-    currGath = ''
-    currGathNo = 0
+        joinedLines = ''.join(cleanLines)
+        joinedLines = re.sub(r'=(?!$)', '', joinedLines)
+        return joinedLines
 
     def resetGathering(self):
         self.currPage = 0
@@ -60,10 +100,62 @@ class TextExtractor:
 
     def extractText(self, xmlPath, outputPath, metaOutputPath):
         self.resetGathering()
+        root = getXMLRoot(xmlPath)
+        pagesText, metaText = self._extractTextFromRoot(root)
+
+        writeToCSV(outputPath, pagesText, header=[
+            'text',
+            'bookpart',
+            'paragraph',
+            'page',
+            'fol',
+            'gathering'
+        ])
+        writeToCSV(metaOutputPath, metaText, header=[
+            'text',
+            'bookpart',
+            'paragraph',
+            'page',
+            'fol',
+            'gathering'
+        ])
+
+    def extractGoldText(self, xmlPath, outputdir):
+        root = getXMLRoot(xmlPath)
+        for goldtext in root.findall('./tei:TEI', self.ns):
+            textid = goldtext.attrib.get(self.xmlns + 'id')
+
+            locstart = goldtext.find('.//tei:citedRange', self.ns).attrib.get('from')
+            locstart = locstart.split('-')
+            self.currPage = int(locstart[0])
+            self.currFol = locstart[1]
+            self.currGath = locstart[2]
+            self.currGathNo = int(locstart[3])
+
+            pagesText, metaText = self._extractTextFromRoot(goldtext)
+
+            writeToCSV(os.path.join(outputdir, textid + '_gold_pages.csv'), pagesText, header=[
+                'text',
+                'bookpart',
+                'paragraph',
+                'page',
+                'fol',
+                'gathering'
+            ])
+            writeToCSV(os.path.join(outputdir, textid + '_gold_meta.csv'), metaText, header=[
+                'text',
+                'bookpart',
+                'paragraph',
+                'page',
+                'fol',
+                'gathering'
+            ])
+
+    def _extractTextFromRoot(self, root:ET.Element):
         metaText = []
         pagesText = []
         header = {}
-        root = getXMLRoot(xmlPath)
+
         for div in root.findall('.//tei:div', self.ns):
             bookpart = div.attrib.get('n')
 
@@ -109,13 +201,6 @@ class TextExtractor:
                         if pageLines:
                             joined = self.joinLines(pageLines)
                             if joined != '':
-                                # re-add syllabification marker if a word is broken over two pages
-                                li = -1
-                                if len(pageLines[-1].findall('./' + self.tei + 'fw[@type="sig"]')) > 0 and len(pageLines) >= 2:
-                                    li = -2
-                                if len(pageLines[li].findall('./' + self.tei + 'pc[@type="syllabification"]')) > 0:
-                                    joined += '-'
-
                                 pagesText.append([
                                     joined,
                                     bookpart,
@@ -177,19 +262,4 @@ class TextExtractor:
                         ])
                     pageLines.clear()
 
-        writeToCSV(outputPath, pagesText, header=[
-            'text',
-            'bookpart',
-            'paragraph',
-            'page',
-            'fol',
-            'gathering'
-        ])
-        writeToCSV(metaOutputPath, metaText, header=[
-            'text',
-            'bookpart',
-            'paragraph',
-            'page',
-            'fol',
-            'gathering'
-        ])
+        return pagesText, metaText
