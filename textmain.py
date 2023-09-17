@@ -95,7 +95,7 @@ def main_prelem():
     basefiles.sort()
     basefiles = [os.path.join('textbase/base', f) for f in basefiles]
     TC = TextCleaner(normalize_casesens, normalize_caselowe_superficial, prefixes, unDCT)
-    TC.cleanTextFromMultiCSV(basefiles, os.path.join(unul, 'pages'), normalize=False, lowercase=True,
+    TC.cleanTextFromMultiCSV(basefiles, os.path.join(unul, 'pages'), normalize=True, lowercase=True,
                              addnorms=[normalize_meta, None, None, None], joinpbs=[False, True, False, True],
                              docids=['Dk', 'Dk', 'KCh', 'KCh'])
 
