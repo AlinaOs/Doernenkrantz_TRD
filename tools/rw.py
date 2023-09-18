@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as ET
 import csv
 import json
+import jsonlines
 
 
 def getXMLRoot(path):
@@ -66,3 +67,11 @@ def readFromTxt(path):
     with open(path, 'r', newline='', encoding='utf-8') as txtfile:
         txt = txtfile.read()
     return txt.strip()
+
+
+def readJsonFromJsonlines(path) -> list[dict]:
+    lines = []
+    with jsonlines.open(path) as reader:
+        for obj in reader:
+            lines.append(obj)
+    return lines

@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-from tools.rw import readDictFromJson, saveDictAsJson, readFromCSV, readFromTxt
+from tools.rw import readDictFromJson, saveDictAsJson, readFromCSV, readFromTxt, readJsonFromJsonlines
 
 
 def blastify(innput, outdir, title, docid=None, filename=None, gzipdir=None):
@@ -158,7 +158,7 @@ def tpairify(innput, outdir, metadata, name, title, year, author, prefix=None):
             mdfile.write(md)
 
 
-def blastifyDir(indir, outdir, filenames, ext='.csv'):
+def blastifyDir(indir, outdir, filenames, ext='.csv', gzipdir=None):
     """
     Performs a blastification for all the files in indir that match the filenames and extension given. The output
     is written to outdir.
@@ -171,13 +171,17 @@ def blastifyDir(indir, outdir, filenames, ext='.csv'):
     if not os.path.exists(outdir):
         os.mkdir(outdir)
     for f in filenames:
+        if not f.endswith(ext):
+            continue
+        fpath = os.path.join(indir, f)
         title = f.split('_')[0]
         docid = f.split('.')[0]
         blastify(
-            os.path.join(indir, f + ext),
+            fpath,
             outdir,
             title,
-            docid=docid
+            docid=docid,
+            gzipdir=gzipdir
         )
 
 
@@ -194,10 +198,13 @@ def passimifyDir(indir, outdir, filenames, ext='.csv'):
     if not os.path.exists(outdir):
         os.mkdir(outdir)
     for f in filenames:
+        if not f.endswith(ext):
+            continue
+        fpath = os.path.join(indir, f)
         series = f.split('_')[0]
         docid = f.split('.')[0]
         passimify(
-            os.path.join(indir, f + ext),
+            fpath,
             outdir,
             series,
             docid=docid
@@ -247,7 +254,7 @@ def tpairifyDir(indir, outdir, filenames, ext='.csv'):
             mdfile = mdtarget
 
         tpairify(
-            os.path.join(indir, f + ext),
+            os.path.join(indir, f),
             outdir,
             mdfile,
             name,
@@ -274,7 +281,7 @@ def filterBlastClusters(innput, outdir, fname=None):
     if fname is None:
         bn = os.path.basename(innput)
         bn = '.'.join(bn.split('.')[0:-1])
-        fname = os.path.join(outdir, bn + '-filtered.json')
+        fname = bn + '-filtered.json'
     cluster = readDictFromJson(innput)
     newcluster = {}
     for k in cluster.keys():
@@ -284,3 +291,19 @@ def filterBlastClusters(innput, outdir, fname=None):
         if len(titles) > 1:
             newcluster[k] = cluster[k]
     saveDictAsJson(os.path.join(outdir, fname), newcluster)
+
+
+def reformatPassimOutput(inpath, outpath):
+    passages = readJsonFromJsonlines(inpath)
+    clusters = dict()
+    for p in passages:
+        if p['cluster'] in clusters.keys():
+            clusterentry = clusters.get(p['cluster'])
+        else:
+            clusterentry = {'cid': p['cluster'], 'matches': []}
+        matchlist = clusterentry['matches']
+        matchlist.append(p)
+        clusterentry['matches'] = matchlist
+        clusters[p['cluster']] = clusterentry
+    clusters = {'clusters': list(clusters.values())}
+    saveDictAsJson(outpath, clusters)
