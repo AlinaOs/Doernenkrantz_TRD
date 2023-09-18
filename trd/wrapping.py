@@ -446,13 +446,13 @@ def runtextpair(basedir, dockermount, outdir, configpath):
     cmd = ['docker', 'run',
            '--rm',
            '-v', f'{basedir}:{dockermount}',
-           'artfl/TextPAIR',
+           'artfl/textpair',
            'sh', '-c',
-           'init_TextPAIR_db; TextPAIR '
+           'init_textpair_db; textpair '
            f'--config={dockerconf} '
            f'--output_path={dockerout} '
            '--skip_web_app '
-           'TextPAIR'
+           'textpair'
            ]
 
     subprocess.run(cmd, check=True)
