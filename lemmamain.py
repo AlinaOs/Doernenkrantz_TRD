@@ -6,8 +6,8 @@ from tools.lang import Dictionary
 from tools.rw import readDictFromJson
 
 dateobj = datetime.datetime
-#basepath = 'lemmamodels'
-basepath = 'test/lemmatest'
+basepath = 'lemmamodels'
+#basepath = 'test/lemmatest'
 
 phonscoring = readDictFromJson('input/normalization/scoring.json')
 homoscoring = readDictFromJson('input/normalization/scoring_homography.json')
@@ -110,8 +110,43 @@ def main_normed(DCTpath):
     PL_NF.export()
 
 
+def resumeLovNorm():
+    n_path = os.path.join(basepath, 'lov-norm')
+
+    PL_N = Pseudolemmatizer(dirpath=n_path, name='LOV-N', mode='loadbase')
+
+    print(date() + ' MAIN: Resuming model training.')
+    PL_N.train(resumecomdir=os.path.join(n_path, 'comms'))
+    PL_N.export()
+    print(date() + ' MAIN: No fine-tuning of short word communities.')
+    print(date() + ' MAIN: Fine-tuning wordgroups.')
+    PL_N.finetuneWordgroups()
+    print(date() + ' MAIN: Assigning Lemmata.')
+    PL_N.assignLemmata()
+    PL_N.export()
+
+
+def lovNormFinetuned():
+    n_path = os.path.join(basepath, 'lov-norm')
+    print()
+    print()
+    print(date() + ' MAIN: Fine-tuning the LOV-N model: LOV-NF.')
+    nf_path = os.path.join(basepath, 'lov-norm-finetuned')
+    if not os.path.exists(nf_path):
+        os.mkdir(nf_path)
+    PL_NF = Pseudolemmatizer(dirpath=nf_path, name='LOV-NF', mode='load', loadpath=n_path)
+    print(date() + ' MAIN: Fine-tuning short word communities.')
+    PL_NF.finetuneShortWordCommunities(smcustomization=phonscoring['scoring'], combilists=phonscoring['combilists'])
+    print(date() + ' MAIN: Fine-tuning wordgroups.')
+    PL_NF.finetuneWordgroups()
+    print(date() + ' MAIN: Assigning Lemmata.')
+    PL_NF.assignLemmata()
+    PL_NF.export()
+
+
 if __name__ == '__main__':
 
+    '''
     if not os.path.exists(os.path.join(basepath, 'lov-unnorm')):
         main_unnormed('input/normalization/vocabulary_full_test_bigger.json')
         # main_unnormed('input/normalization/vocab_full_unnormalized.json')
@@ -120,3 +155,5 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(basepath, 'lov-norm')):
         main_normed('input/normalization/vocabulary_full_test_bigger.json')
         # main_normed('input/normalization/vocab_full_normalized.json')
+    '''
+    resumeLovNorm()

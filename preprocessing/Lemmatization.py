@@ -397,7 +397,7 @@ class Pseudolemmatizer:
                                                                                             time.gmtime(te - ts)) + '.')
         q.put_nowait(edges)
 
-    def train(self, algo='louvain', resolution=1, enforcedensity=True, communities=None):
+    def train(self, algo='louvain', resolution=1, enforcedensity=True, resumecomdir=None, communities=None):
         """
         Trains the model. To apply this function, the model needs to have been prepared first by the prepare() function.
         The training works by detecting communities in the model's graph using the community detection algorithm given
@@ -417,29 +417,35 @@ class Pseudolemmatizer:
         :param algo: The algorithm to use for the community detection.
         :param resolution: The resolution value to use when detecting communities with louvain or mod.
         :param enforcedensity: Whether or not to train iteratively, favouring fully connected communities.
+        :param resumecomdir: A path to a directory containing intermediate data from a previous iterative training. If
+            resumecomdir is not None, the training will be initialized with the newest data in that directory.
         """
 
-        print(self.date() + ' PL-' + self.name + f': Training started.')
-        self.communities = []
-        self.wordgroups = []
-        self.info['cdalgo'] = algo
+        if resumecomdir is not None:
+            communities = self._resumeIterativeTraining(resumecomdir, algo=algo, resolution=resolution)
+        else:
+            print(self.date() + ' PL-' + self.name + f': Training started.')
+            self.communities = []
+            self.wordgroups = []
+            self.info['cdalgo'] = algo
 
-        compath = os.path.join(self.dirpath, 'comms')
-        if not os.path.exists(compath):
-            os.mkdir(compath)
+            compath = os.path.join(self.dirpath, 'comms')
+            if not os.path.exists(compath):
+                os.mkdir(compath)
 
-        if communities is None:
-            print(self.date() + ' PL-' + self.name + f': Calculating communities using ' + algo + ' algorithm...')
-            communities = self.detectCommunities(
-                self.G,
-                algo=algo,
-                resolution=resolution
-            )
-            saveDictAsJson(os.path.join(compath, 'basecomms.json'), {'comms': communities})
-            print(self.date() + ' PL-' + self.name + f': Done.')
-        if enforcedensity:
-            communities = self._iterdetectCommunities(compath, algo=algo, resolution=resolution,
+            if communities is None:
+                print(self.date() + ' PL-' + self.name + f': Calculating communities using ' + algo + ' algorithm...')
+                communities = self.detectCommunities(
+                    self.G,
+                    algo=algo,
+                    resolution=resolution
+                )
+                saveDictAsJson(os.path.join(compath, 'basecomms.json'), {'comms': communities})
+                print(self.date() + ' PL-' + self.name + f': Done.')
+            if enforcedensity:
+                communities = self._iterdetectCommunities(compath, algo=algo, resolution=resolution,
                                                       comcandidates=communities)
+
         communities = self.calculateMeansim(communities)
         self.communities.extend(self.assignRepresentative(communities))
         self.communities = self.calculateAverageWordLength()
@@ -454,6 +460,52 @@ class Pseudolemmatizer:
             self.info['lemmacount']) + ' unique lemmata.')
 
         self.state = 1
+
+    def _resumeIterativeTraining(self, comdir, G: nx.Graph = None, algo='louvain', resolution=1):
+        """
+        Resume training with iterative community detection based on the intermediate data saved during iterative
+        community detection in comdir. The function looks for the last iteration file, reads the data and calls
+        the function _iterdetectCommunities with the corresponiding initial data.
+
+        :param comdir: The path to the directory containing the intermediate training data.
+        :param G: The graph, that all communities are subgraphs of.
+        :param algo: The algorithm to use for the community detection.
+        :param resolution: The resolution value to use when detecting communities with louvain or mod.
+        :return: A list of found communities.
+        """
+
+        comdirname = os.path.split(comdir)[1]
+        files = os.listdir(comdir)
+        newcomdir = os.path.join(self.dirpath, comdirname)
+        if os.path.realpath(comdir) != os.path.realpath(newcomdir):
+            if not os.path.exists(newcomdir):
+                os.mkdir(newcomdir)
+            for f in files:
+                shutil.copy(os.path.join(comdir, f), os.path.join(self.dirpath, comdirname, f))
+
+        if len(files) == 0:
+            return FileNotFoundError
+
+        files.sort()
+        comfile = files[-1]
+        coms = readDictFromJson(os.path.join(comdir, comfile))
+
+        if len(files) == 1 and comfile == 'basecomms.json':
+            comcandidates = coms['comms']
+            print(self.date() + ' PL-' + self.name + f': Resuming iterative training using'
+                                                     f' {len(comcandidates)} base communities.')
+            return self._iterdetectCommunities(newcomdir, algo=algo, resolution=resolution, comcandidates=comcandidates)
+
+        communities = coms['previous']
+        currcov = sum([len(c['words']) for c in communities])
+        currit = int(os.path.splitext(comfile)[0].split('-')[-1])
+        comcandidates = list(coms['new']) + list(coms['weak'])
+        if G is None:
+            G = self.G
+
+        print(self.date() + ' PL-' + self.name + f': Resuming iterative training with data from iteration {currit-1}.')
+
+        return self._iterdetectCommunities(newcomdir, G, algo, resolution, comcandidates, communities, currcov, currit)
 
     def detectCommunities(self, BG, algo='louvain', resolution=1) -> list[dict]:
         """
@@ -505,12 +557,12 @@ class Pseudolemmatizer:
         return communities
 
     def _iterdetectCommunities(self, comdir, G: nx.Graph=None, algo='louvain', resolution=1,
-                               comcandidates: list[dict] = None) -> list[dict]:
+                               comcandidates: list[dict] = None, communities=None, coverage=0, it=1) -> list[dict]:
         """
-        Calculates communities iteratively until either all found communities are fully connected, or until no new
-        communities are found within the exiting ones. To apply this function, the model needs to have been prepared
-        first by the prepare() function. The training works by detecting communities in the given graph G using the
-        community detection algorithm given in algo. Possible algorithms are:
+        Calculates communities iteratively, starting with the comcandidates, until either all found communities are
+        fully connected, or until no new communities are found within the exiting ones. To apply this function, the
+        model needs to have been prepared first by the prepare() function. The training works by detecting communities
+        in the given graph G using the community detection algorithm given in algo. Possible algorithms are:
 
         * "louvain" = Louvain algorithm, default (docs: https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.community.louvain.louvain_communities.html)
         * "mod" = greedy modularity maximization (https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.community.modularity_max.greedy_modularity_communities.html)
@@ -520,12 +572,23 @@ class Pseudolemmatizer:
         If louvain or mod is used, the resolution parameter will determine the resolution value used for the community
         detection.
 
+        Use the parameters comdir, comcandidates, communities, coverage and it if the detection shall be initiated with
+        data from a previously interrupted iterative community detection.
+
+        :param comdir: Path to a directory where intermediate community data will be stored.
         :param algo: The algorithm to use for the community detection.
         :param resolution: The resolution value to use when detecting communities with louvain or mod.
+        :param comcandidates: The base communities to be iteratively refined. If None, the comcandidates will be defined
+            by running detectCommunities() first.
+        :param communities: The communities that have already been found and should no be reiterated.
+        :param coverage: The current coverage of words in the already found communities.
+        :param it: The number of the next iteration.
+        :return: A list of found communities.
         """
         if G is None:
             G = self.G
-        communities = []
+        if communities is None:
+            communities = []
         if not os.path.exists(comdir):
             os.mkdir(comdir)
 
@@ -540,8 +603,10 @@ class Pseudolemmatizer:
             print(self.date() + ' PL-' + self.name + f': Done.')
 
         print(self.date() + ' PL-' + self.name + f': Checking density of the detected communities.')
-        coverage = 0
-        it = 1
+        #coverage = 0
+        #it = 1
+        #coverage = currcov
+        #it = currit
         weakcomms = []
         formno = G.number_of_nodes()
         while coverage != formno:
