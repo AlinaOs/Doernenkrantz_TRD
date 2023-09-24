@@ -1,7 +1,9 @@
-import math
 import os
 import shutil
 import tempfile
+from multiprocessing import Queue, Manager, Process
+
+import psutil
 
 from tools.rw import saveDictAsJson, readDictFromJson, readFromTxt, readJsonFromJsonlines
 from trd.wrapping import runblastFull, runpassimFull, runtextpairFull
@@ -229,6 +231,38 @@ def humanReadableMatchinfo(matchpairs, textdir, goldmatches):
     return matchinfo
 
 
+def _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, paramnames, cpudivisor=1):
+    runinfos = []
+    runnototal = len(runparams)
+
+    runno = 0
+    cpuno = int(len(psutil.Process().cpu_affinity())/cpudivisor)
+    if cpuno ==0:
+        cpuno = 1
+    while runno < runnototal:
+        pno = 0
+        manager = Manager()
+        q = manager.Queue()
+        processes = []
+        while pno < cpuno and runno < runnototal:
+            prms = runparams[runno]
+            baseargs = [runno, runnototal, golddir, outdir, goldmatches, q]
+            paramargs = [prms[name] for name in paramnames]
+            args = tuple(baseargs + paramargs)
+            p = Process(target=target, name=str(runno),
+                        args=args)
+            processes.append(p)
+            p.start()
+            pno += 1
+            runno += 1
+        for proc in processes:
+            proc.join()
+        while q.qsize() != 0:
+            info = q.get()
+            runinfos.append(info)
+    return runinfos
+
+
 def evaluateBlast(outdir: str, golddir: str, goldmatches: list[tuple[str, int, int]], e_value: list[float],
                   word_size: list[int], evalinfo: dict = None):
     """
@@ -249,62 +283,27 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[tuple[str, int, i
     print('### Evaluating BLAST')
     print()
 
-    runnototal = math.prod([len(lst) for lst in [e_value, word_size]])
+    runparams = []
+    for e in e_value:
+        for ws in word_size:
+            runparams.append({
+                'e_value': e,
+                'word_size': ws
+            })
+    paramnames = ['e_value', 'word_size']
+    target = _blastEvalRun
+
+    runinfos = _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, paramnames)
+    runinfos.sort(key=lambda r: r['run_no'])
+
     overallinfo = {
         'tool': 'BLAST',
-        'runno': runnototal,
+        'runno': len(runparams),
         'test_e_value': e_value,
         'test_word_size': word_size,
         'all_goldmatches': len(goldmatches),
         'note': evalinfo if evalinfo is not None else dict()
     }
-    runinfos = []
-
-    runno = 0
-    for e in e_value:
-        for ws in word_size:
-            print()
-            print(f'### Performing run {runno + 1} of {runnototal}')
-
-            resultdir = os.path.join(outdir, 'run_' + str(runno))
-            if os.path.exists(resultdir):
-                shutil.rmtree(resultdir)
-            os.mkdir(resultdir)
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                info = runblastFull(golddir, tmpdir, resultdir, e, ws)
-                info['resultdir'] = resultdir
-                info['run_no'] = runno
-
-                testmatches = []
-
-                # Extract matches found by the tool
-                clusterfiles = os.listdir(resultdir)
-                for cf in clusterfiles:
-                    cname = os.path.basename(cf)
-                    clusters = readDictFromJson(os.path.join(resultdir, cname))
-                    for ck in clusters.keys():
-                        c = clusters[ck]
-                        match = []
-                        for m in c['hits']:
-                            match.append((
-                                m['doc_id'],
-                                m['original_indices'][0],
-                                m['original_indices'][1]
-                            ))
-                        testmatches.append(match)
-
-            # Evaluate the recall of goldmatches
-            literalgms = evaluateRecall(testmatches, goldmatches)
-
-            info['goldmatch_no'] = len(literalgms)
-            info['goldmatches'] = literalgms
-            info['testmatch_no'] = len(testmatches)
-
-            saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
-            runinfos.append(info)
-
-            runno += 1
 
     print('Finding best run.')
     overallinfo['run_details'] = runinfos
@@ -321,6 +320,49 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[tuple[str, int, i
     print()
 
     return bestrun["config"]
+
+
+def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_value, word_size):
+    print()
+    print(f'### Performing run {runno + 1} of {runnototal}')
+
+    resultdir = os.path.join(outdir, 'run_' + str(runno))
+    if os.path.exists(resultdir):
+        shutil.rmtree(resultdir)
+    os.mkdir(resultdir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        info = runblastFull(golddir, tmpdir, resultdir, e_value, word_size)
+        info['resultdir'] = resultdir
+        info['run_no'] = runno
+
+        testmatches = []
+
+        # Extract matches found by the tool
+        clusterfiles = os.listdir(resultdir)
+        for cf in clusterfiles:
+            cname = os.path.basename(cf)
+            clusters = readDictFromJson(os.path.join(resultdir, cname))
+            for ck in clusters.keys():
+                c = clusters[ck]
+                match = []
+                for m in c['hits']:
+                    match.append((
+                        m['doc_id'],
+                        m['original_indices'][0],
+                        m['original_indices'][1]
+                    ))
+                testmatches.append(match)
+
+    # Evaluate the recall of goldmatches
+    literalgms = evaluateRecall(testmatches, goldmatches)
+
+    info['goldmatch_no'] = len(literalgms)
+    info['goldmatches'] = literalgms
+    info['testmatch_no'] = len(testmatches)
+
+    saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
+    q.put(info)
 
 
 def evaluatePassim(outdir: str, golddir: str, goldmatches: list[tuple[str, int, int]], n: list[int],
@@ -354,67 +396,43 @@ def evaluatePassim(outdir: str, golddir: str, goldmatches: list[tuple[str, int, 
     if maxDF is None:
         maxDF = [100]
 
-    runnototal = math.prod([len(lst) for lst in [n, min_align, beam, pcopy, all_pairs, maxDF, min_match]])
-    overallinfo = {
-        'tool': 'BLAST',
-        'runno': runnototal,
-        'test_n': n,
-        'test_min_align': min_align,
-        'all_goldmatches': len(goldmatches),
-        'note': evalinfo if evalinfo is not None else dict()
-    }
-    runinfos = []
-
-    runno = 0
+    runparams = []
     for nn in n:
         for ma in min_align:
             for b in beam:
                 for p in pcopy:
                     for ap in all_pairs:
-                        for mdf in maxDF:
-                            for mm in min_match:
-                                print()
-                                print(f'### Performing run {runno + 1} of {runnototal}')
+                        for mm in min_match:
+                            for mdf in maxDF:
+                                runparams.append({
+                                    'n': nn,
+                                    'min_align': ma,
+                                    'beam': b,
+                                    'pcopy': p,
+                                    'all_pairs': ap,
+                                    'min_match': mm,
+                                    'maxDF': mdf
+                                })
 
-                                resultdir = os.path.join(outdir, 'run_' + str(runno))
-                                if os.path.exists(resultdir):
-                                    shutil.rmtree(resultdir)
-                                os.mkdir(resultdir)
+    paramnames = ['n', 'min_align', 'beam', 'pcopy', 'all_pairs', 'min_match', 'maxDF']
+    target = _passimEvalRun
 
-                                with tempfile.TemporaryDirectory() as tmpdir:
-                                    info = runpassimFull(golddir, tmpdir, resultdir, n=nn, min_align=ma, beam=b,
-                                                                    floating_ngrams=True, pcopy=p, all_pairs=ap,
-                                                                    min_match=mm, maxDF=mdf)
-                                    info['resultdir'] = resultdir
-                                    info['run_no'] = runno
+    runinfos = _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, paramnames, cpudivisor=2)
+    runinfos.sort(key=lambda r: r['run_no'])
 
-                                    testmatches = []
-                                    cpath = os.path.join(resultdir, 'out.json')
-
-                                # Extract matches found by the tool
-                                clusters = readDictFromJson(cpath)
-                                for c in clusters['clusters']:
-                                    match = []
-                                    for m in c['matches']:
-                                        match.append((
-                                            m['id'],
-                                            m['begin'],
-                                            m['end']
-                                        ))
-                                    testmatches.append(match)
-
-                                # Evaluate the recall of goldmatches
-                                gms = evaluateRecall(testmatches, goldmatches)
-
-                                info['goldmatch_no'] = len(gms)
-                                info['goldmatches'] = gms
-                                info['testmatch_no'] = len(testmatches)
-
-                                print(info)
-                                saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
-                                runinfos.append(info)
-
-                                runno += 1
+    overallinfo = {
+        'tool': 'Passim',
+        'runno': len(runparams),
+        'test_n': n,
+        'test_min_align': min_align,
+        'test_beam': beam,
+        'test_pcopy': pcopy,
+        'test_all_pairs': all_pairs,
+        'test_min_match': min_match,
+        'test_maxDF': maxDF,
+        'all_goldmatches': len(goldmatches),
+        'note': evalinfo if evalinfo is not None else dict()
+    }
 
     print('Finding best run.')
     overallinfo['run_details'] = runinfos
@@ -433,6 +451,50 @@ def evaluatePassim(outdir: str, golddir: str, goldmatches: list[tuple[str, int, 
     print()
 
     return bestrun["config"]
+
+
+def _passimEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, n, min_align, beam,
+                   pcopy, all_pairs, min_match, maxDF):
+    print()
+    print(f'### Performing run {runno + 1} of {runnototal}: {n}, {min_align}, {beam}, {pcopy}, {all_pairs},'
+          f' {min_match}, {maxDF}')
+
+    resultdir = os.path.join(outdir, 'run_' + str(runno))
+    if os.path.exists(resultdir):
+        shutil.rmtree(resultdir)
+    os.mkdir(resultdir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        info = runpassimFull(golddir, tmpdir, resultdir, n=n, min_align=min_align, beam=beam,
+                             floating_ngrams=True, pcopy=pcopy, all_pairs=all_pairs,
+                             min_match=min_match, maxDF=maxDF)
+        info['resultdir'] = resultdir
+        info['run_no'] = runno
+
+        testmatches = []
+        cpath = os.path.join(resultdir, 'out.json')
+
+    # Extract matches found by the tool
+    clusters = readDictFromJson(cpath)
+    for c in clusters['clusters']:
+        match = []
+        for m in c['matches']:
+            match.append((
+                m['id'],
+                m['begin'],
+                m['end']
+            ))
+        testmatches.append(match)
+
+    # Evaluate the recall of goldmatches
+    gms = evaluateRecall(testmatches, goldmatches)
+
+    info['goldmatch_no'] = len(gms)
+    info['goldmatches'] = gms
+    info['testmatch_no'] = len(testmatches)
+
+    saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
+    q.put(info)
 
 
 def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int, int]], ngram: list[int],
@@ -467,13 +529,36 @@ def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int
     if store_banalities is None:
         store_banalities = [False]
 
-    cwd = os.getcwd()
+    runparams = []
+    for n in ngram:
+        for g in gap:
+            for mws in matching_window_size:
+                for mmnid in minimum_matching_ngrams_in_docs:
+                    for mmniw in minimum_matching_ngrams_in_window:
+                        for mg in max_gap:
+                            for mmn in minimum_matching_ngrams:
+                                for sb in store_banalities:
+                                    runparams.append({
+                                        'ngram': n,
+                                        'gap': g,
+                                        'matching_window_size': mws,
+                                        'minimum_matching_ngrams_in_docs': mmnid,
+                                        'minimum_matching_ngrams_in_window': mmniw,
+                                        'max_gap': mg,
+                                        'minimum_matching_ngrams': mmn,
+                                        'store_banalities': sb
+                                    })
 
-    runnototal = math.prod([len(lst) for lst in [ngram, gap, matching_window_size, minimum_matching_ngrams_in_docs,
-                                                 minimum_matching_ngrams_in_window, max_gap, minimum_matching_ngrams]])
+    paramnames = ['ngram', 'gap', 'matching_window_size', 'minimum_matching_ngrams_in_docs',
+                  'minimum_matching_ngrams_in_window', 'max_gap', 'minimum_matching_ngrams', 'store_banalities']
+    target = _textpairEvalRun
+
+    runinfos = _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, paramnames)
+    runinfos.sort(key=lambda r: r['run_no'])
+
     overallinfo = {
-        'test_tool': 'BLAST',
-        'test_runno': runnototal,
+        'test_tool': 'TextPAIR',
+        'test_runno': len(runparams),
         'test_ngram': ngram,
         'test_gap': gap,
         'test_matching_window_size': matching_window_size,
@@ -484,62 +569,6 @@ def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int
         'all_goldmatches': len(goldmatches),
         'note': evalinfo if evalinfo is not None else dict()
     }
-    runinfos = []
-
-    runno = 0
-    for n in ngram:
-        for g in gap:
-            for mws in matching_window_size:
-                for mmnid in minimum_matching_ngrams_in_docs:
-                    for mmniw in minimum_matching_ngrams_in_window:
-                        for mg in max_gap:
-                            for mmn in minimum_matching_ngrams:
-                                for sb in store_banalities:
-                                    print()
-                                    print(f'### Performing run {runno + 1} of {runnototal}')
-
-                                    resultdir = os.path.join(outdir, 'run_' + str(runno))
-                                    if os.path.exists(resultdir):
-                                        shutil.rmtree(resultdir)
-                                    os.mkdir(resultdir)
-
-                                    with tempfile.TemporaryDirectory(dir=resultdir) as tmpdir:
-
-                                        os.chdir(cwd)
-                                        info = runtextpairFull(golddir, tmpdir, resultdir, n, g, mws, mmnid,
-                                                                          mmniw, mg, mmn, sb)
-                                        os.chdir(cwd)
-
-                                        info['resultdir'] = resultdir
-                                        info['run_no'] = runno
-
-                                        testmatches = []
-                                        rpath = os.path.join(resultdir, 'alignments.jsonl')
-
-                                        # Extract matches found by the tool
-                                        jlines = readJsonFromJsonlines(rpath)
-                                        for jl in jlines:
-                                            match = [
-                                                (os.path.basename(jl['source_filename'])[0:-4],
-                                                 jl['source_start_byte'],
-                                                 jl['source_start_byte'] + len(jl['source_passage'])),
-                                                (os.path.basename(jl['target_filename'])[0:-4],
-                                                 jl['target_start_byte'],
-                                                 jl['target_start_byte'] + len(jl['target_passage']))
-                                            ]
-                                            testmatches.append(match)
-
-                                    # Evaluate the recall of goldmatches
-                                    literalgms = evaluateRecall(testmatches, goldmatches)
-
-                                    info['goldmatch_no'] = len(literalgms)
-                                    info['goldmatches'] = literalgms
-                                    info['testmatch_no'] = len(testmatches)
-
-                                    saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
-                                    runinfos.append(info)
-
-            runno += 1
 
     print('Finding best run.')
     overallinfo['run_details'] = runinfos
@@ -557,6 +586,55 @@ def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int
     print(f'The run found {bestrun["goldmatch_no"]} of {len(goldmatches)} goldmatches '
           f'and {bestrun["testmatch_no"]} matches in total.')
     print()
-    os.chdir(cwd)
+    os.chdir(os.getenv('PWD'))
 
     return bestrun["config"]
+
+
+def _textpairEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, ngram, gap, matching_window_size,
+                     minimum_matching_ngrams_in_docs, minimum_matching_ngrams_in_window, max_gap,
+                     minimum_matching_ngrams, store_banalities):
+    print()
+    print(f'### Performing run {runno + 1} of {runnototal}')
+
+    resultdir = os.path.join(outdir, 'run_' + str(runno))
+    if os.path.exists(resultdir):
+        shutil.rmtree(resultdir)
+    os.mkdir(resultdir)
+
+    with tempfile.TemporaryDirectory(dir=resultdir) as tmpdir:
+
+        os.chdir(os.getenv('PWD'))
+        info = runtextpairFull(golddir, tmpdir, resultdir, ngram, gap, matching_window_size,
+                               minimum_matching_ngrams_in_docs, minimum_matching_ngrams_in_window, max_gap,
+                               minimum_matching_ngrams, store_banalities)
+        os.chdir(os.getenv('PWD'))
+
+        info['resultdir'] = resultdir
+        info['run_no'] = runno
+
+        testmatches = []
+        rpath = os.path.join(resultdir, 'alignments.jsonl')
+
+        # Extract matches found by the tool
+        jlines = readJsonFromJsonlines(rpath)
+        for jl in jlines:
+            match = [
+                (os.path.basename(jl['source_filename'])[0:-4],
+                 jl['source_start_byte'],
+                 jl['source_start_byte'] + len(jl['source_passage'])),
+                (os.path.basename(jl['target_filename'])[0:-4],
+                 jl['target_start_byte'],
+                 jl['target_start_byte'] + len(jl['target_passage']))
+            ]
+            testmatches.append(match)
+
+    # Evaluate the recall of goldmatches
+    literalgms = evaluateRecall(testmatches, goldmatches)
+
+    info['goldmatch_no'] = len(literalgms)
+    info['goldmatches'] = literalgms
+    info['testmatch_no'] = len(testmatches)
+
+    saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
+    q.put(info)

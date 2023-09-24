@@ -59,7 +59,7 @@ if __name__ == '__main__':
                    'KCh_gold_meta')
     '''
 
-    extractReusePairs(fulltextdir, os.path.join(evaldir, 'golddata'))
+    #extractReusePairs(fulltextdir, os.path.join(evaldir, 'golddata'))
 
     literal, weak_literal, non_literal = parseGoldmatches('input/evaluation/golddata/goldmatches.json')
     evalinfo = {
@@ -68,12 +68,22 @@ if __name__ == '__main__':
         'date': datetime.datetime.now().strftime('%Y-%m-%d')
     }
 
-    evaluateBlast('test/blast', 'input/evaluation/golddata', goldmatches=literal + weak_literal, e_value=[0.001, 0.01],
-                  word_size=[5], evalinfo=evalinfo)
+    evaluateBlast('test/blast', 'input/evaluation/golddata', goldmatches=literal + weak_literal,
+                  e_value=[0.001, 0.05, 0.01, 0.5, 0.1], word_size=[2, 3, 5, 6, 7], evalinfo=evalinfo)
+
+    evaluateTextpair('test/textpair', 'input/evaluation/golddata', goldmatches=literal + weak_literal,
+                     ngram=[3, 4, 5], gap=[1, 2], matching_window_size=[30], minimum_matching_ngrams_in_window=[4],
+                     minimum_matching_ngrams_in_docs=[4], max_gap=[15, 20], minimum_matching_ngrams=[4, 5],
+                     evalinfo=evalinfo)
 
     evaluatePassim('test/passim', 'input/evaluation/golddata', goldmatches=literal + weak_literal,
-                   n=[8, 9], min_align=[50], all_pairs=[True], pcopy=[0.8], beam=[20], evalinfo=evalinfo)
+                   n=[5, 6, 7, 8, 9], min_align=[40, 50], all_pairs=[True], pcopy=[0.8], beam=[20], evalinfo=evalinfo)
 
-    evaluateTextpair('test/textpair', 'input/evaluation/golddata', goldmatches=literal + weak_literal, ngram=[3, 5],
-                     gap=[2], matching_window_size=[30], minimum_matching_ngrams_in_window=[4],
-                     minimum_matching_ngrams_in_docs=[4], max_gap=[15], minimum_matching_ngrams=[4], evalinfo=evalinfo)
+    #evaluatePassim('test/passim', 'input/evaluation/golddata', goldmatches=literal + weak_literal,
+    #               n=[5], min_align=[40], all_pairs=[True], pcopy=[0.8], beam=[20], evalinfo=evalinfo)
+
+    #evaluatePassim('test/passim', 'input/evaluation/golddata', goldmatches=literal + weak_literal,
+    #               n=[8], min_align=[40], all_pairs=[True], pcopy=[0.8], beam=[20], evalinfo=evalinfo)
+
+    #evaluatePassim('test/passim', 'input/evaluation/golddata', goldmatches=literal + weak_literal,
+    #               n=[5], min_align=[40], all_pairs=[True], pcopy=[0.8], beam=[20], evalinfo=evalinfo)

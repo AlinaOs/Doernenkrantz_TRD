@@ -7,12 +7,9 @@ import sys
 
 from trd.formatting import blastifyDir, passimifyDir, tpairifyDir, filterBlastClusters, reformatPassimOutput
 
+blastpath = '/mnt/c/Projects/BLAST/textreuse-blast/run_full.py'
 if sys.platform.startswith('linux'):
     sys.path.append('/mnt/c/Projects/BLAST/textreuse-blast')
-    blastpath = '/mnt/c/Projects/BLAST/textreuse-blast/run_full.py'
-else:
-    sys.path.append('C:\\Projects\\BLAST\\textreuse-blast')
-    blastpath = 'C:\\Projects\\BLAST\\textreuse-blast\\run_full.py'
 
 import subprocess
 import time
@@ -229,7 +226,9 @@ def runpassim(indir, outdir, n=25, min_match=5, maxDF=100, floating_ngrams=False
     :param all_pairs: Whether to compute alignments for all pairs.
     :return: A dictionary containing the configuration details ('config') and the time it took the tool to run ('time').
     """
-    
+
+    os.environ['SPARK_SUBMIT_ARGS'] = '--master local[1] --driver-memory 4G --executor-memory 4G'
+
     timestart = time.time()
 
     cmd = ['passim',
