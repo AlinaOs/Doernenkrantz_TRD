@@ -2,80 +2,164 @@ import os
 import shutil
 import tempfile
 from multiprocessing import Queue, Manager, Process
-
+from io import StringIO
 import psutil
 
-from tools.rw import saveDictAsJson, readDictFromJson, readFromTxt, readJsonFromJsonlines
+from tools.rw import saveDictAsJson, readDictFromJson, readFromTxt, readJsonFromJsonlines, readFromCSV, writeToCSV
+from trd.formatting import blastifyPreparedDir, passimifyPreparedDir, tpairifyPreparedDir
 from trd.wrapping import runblastFull, runpassimFull, runtextpairFull
 
 
-def extractReusePairs(indir, outdir):
+def extractReusePairsFromDir(indir, outdir):
     segments = {}
     infiles = os.listdir(indir)
 
-    opensegments = {}
-
     for f in infiles:
-        if not f.endswith('.txt'):
+        if not (f.endswith('.txt') or f.endswith('.csv')):
             continue
-        fid = f[:-4]
-        with open(os.path.join(indir, f), 'r', encoding='utf-8') as infile:
-            with open(os.path.join(outdir, f), 'w', encoding='utf-8') as outfile:
-                towrite = ''
-                nextchar = infile.read(1)
-                offset = 0
-                while nextchar != '':
-                    if nextchar == '$':
-                        outfile.write(towrite)
-                        towrite = ''
-                        segmeta = ''
-                        nextchar = infile.read(1)
-                        while nextchar != '$':
-                            segmeta += nextchar
-                            nextchar = infile.read(1)
-                        segmeta = segmeta.split('_')
-                        if segmeta[0] == 'segstart':
-                            segments[segmeta[1]] = segmeta[1:]
-                            opensegments[segmeta[1]] = {
-                                'start': offset,
-                                'text': ''
-                            }
-                        else:
-                            segments[segmeta[1]].append(fid)
-                            segments[segmeta[1]].append(opensegments[segmeta[1]]['start'])
-                            segments[segmeta[1]].append(offset - 1)
-                            segments[segmeta[1]].append(opensegments[segmeta[1]]['text'])
-                            del opensegments[segmeta[1]]
-                        nextchar = infile.read(1)
-                    else:
-                        offset += 1
-                        towrite += nextchar
-                        if len(opensegments) > 0:
-                            for k in opensegments:
-                                opensegments[k]['text'] = opensegments[k]['text'] + nextchar
-                        nextchar = infile.read(1)
-                outfile.write(towrite)
+        elif f.endswith('.txt'):
+            segments.update(extractReusePairsFromTxt(os.path.join(indir, f), os.path.join(outdir, f), f))
+        elif f.endswith('.csv'):
+            segments.update(extractReusePairsFromCsv(os.path.join(indir, f), os.path.join(outdir, f)))
 
     matches = []
     for segid in segments.keys():
         seg = segments[segid]
-        if len(seg) > 5:
-            for sourceid in seg[2].split('&'):
+        if 'corresp' in seg.keys():
+            for sourceid in seg['corresp'].split('&'):
                 source = segments[sourceid]
                 match = {
-                    'type': seg[1],
-                    'source': source[-4],
-                    'target': seg[-4],
-                    'start_s': source[-3],
-                    'end_s': source[-2],
-                    'start_t': seg[-3],
-                    'end_t': seg[-2],
-                    'text_s': source[-1],
-                    'text_t': seg[-1]
+                    'type': seg['type'],
+                    'source': source['passages'],
+                    'target': seg['passages']
                 }
                 matches.append(match)
 
     saveDictAsJson(os.path.join(outdir, 'goldmatches.json'), {'matches': matches})
+
+
+def extractReusePairsFromTxt(infile, outfile, fname):
+    segments = {}
+    opensegments = {}
+    fid = os.path.splitext(fname)[0]
+
+    with open(infile, 'r', encoding='utf-8') as infile:
+        with open(outfile, 'w', encoding='utf-8') as outfile:
+            towrite = ''
+            nextchar = infile.read(1)
+            offset = 0
+            while nextchar != '':
+                if nextchar == '$':
+                    outfile.write(towrite)
+                    towrite = ''
+                    segmeta = ''
+                    nextchar = infile.read(1)
+                    while nextchar != '$':
+                        segmeta += nextchar
+                        nextchar = infile.read(1)
+                    segmeta = segmeta.split('_')
+                    if segmeta[0] == 'segstart':
+                        segments[segmeta[1]] = segmeta[1:]
+                        opensegments[segmeta[1]] = {
+                            'start': offset,
+                            'text': '',
+                            'docid': fid
+                        }
+                    else:
+                        segid = segmeta[1]
+                        opensegments[segid]['end'] = offset - 1
+                        seg = {
+                            'passages': [opensegments.pop(segid)]
+                        }
+                        segmeta = segments[segid]
+                        if len(segmeta) > 1:
+                            seg['type'] = segmeta[1]
+                            seg['corresp'] = segmeta[2]
+                        segments[segid] = seg
+                    nextchar = infile.read(1)
+                else:
+                    offset += 1
+                    towrite += nextchar
+                    if len(opensegments) > 0:
+                        for k in opensegments:
+                            opensegments[k]['text'] = opensegments[k]['text'] + nextchar
+                    nextchar = infile.read(1)
+            outfile.write(towrite)
+
+    return segments
+
+
+def extractReusePairsFromCsv(infile, outfile):
+    segments = {}
+    opensegments = {}
+
+    csv = readFromCSV(infile)
+    doclines = csv['lines']
+
+    for li in range(len(doclines)):
+        l = doclines[li]
+        if l[1] == '':
+            continue
+        docid = l[0]
+        if len(opensegments.keys()) > 0:
+            for k in opensegments:
+                opensegments[k].append({
+                        'start': 0,
+                        'text': '',
+                        'docid': docid
+                    })
+        instring = StringIO(l[1])
+        newtext = ''
+        towrite = ''
+        nextchar = instring.read(1)
+        offset = 0
+        while nextchar != '':
+            if nextchar == '$':
+                newtext += towrite
+                towrite = ''
+                segmeta = ''
+                nextchar = instring.read(1)
+                while nextchar != '$':
+                    segmeta += nextchar
+                    nextchar = instring.read(1)
+                segmeta = segmeta.split('_')
+                if segmeta[0] == 'segstart':
+                    segments[segmeta[1]] = segmeta[1:]
+                    opensegments[segmeta[1]] = [{
+                        'start': offset,
+                        'text': '',
+                        'docid': docid
+                    }]
+                else:
+                    segid = segmeta[1]
+                    seg = {
+                        'passages': opensegments.pop(segid)
+                    }
+                    lastpassage = seg['passages'][-1]
+                    lastpassage['end'] = offset - 1
+                    segmeta = segments[segid]
+                    if len(segmeta) > 1:
+                        seg['type'] = segmeta[1]
+                        seg['corresp'] = segmeta[2]
+                    segments[segid] = seg
+                nextchar = instring.read(1)
+            else:
+                offset += 1
+                towrite += nextchar
+                if len(opensegments) > 0:
+                    for k in opensegments:
+                        lastpassage = opensegments[k][-1]
+                        lastpassage['text'] = lastpassage['text'] + nextchar
+                nextchar = instring.read(1)
+        newtext += towrite
+        l[1] = newtext
+        if len(opensegments.keys()) > 0:
+            for k in opensegments:
+                lastpassage = opensegments[k][-1]
+                lastpassage['end'] = offset
+
+    writeToCSV(outfile, doclines, header=csv['header'])
+    return segments
 
 
 def parseGoldmatches(filepath):
@@ -84,10 +168,15 @@ def parseGoldmatches(filepath):
     weak_literal = []
     non_literal = []
     for match in goldmatchdict['matches']:
-        parsedmatch = [
-            (match['source'], match['start_s'], match['end_s'],),
-            (match['target'], match['start_t'], match['end_t'],)
-        ]
+        parsedmatch = []
+        for passage in match['source']:
+            parsedmatch.append(
+                (passage['docid'], passage['start'], passage['end'])
+            )
+        for passage in match['target']:
+            parsedmatch.append(
+                (passage['docid'], passage['start'], passage['end'])
+            )
         if match['type'] == 'literal':
             literal.append(parsedmatch)
         elif match['type'] == 'weak-literal':
@@ -332,7 +421,7 @@ def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_v
     os.mkdir(resultdir)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        info = runblastFull(golddir, tmpdir, resultdir, e_value, word_size)
+        info = runblastFull(golddir, tmpdir, resultdir, e_value, word_size, formatting=blastifyPreparedDir)
         info['resultdir'] = resultdir
         info['run_no'] = runno
 
@@ -467,7 +556,7 @@ def _passimEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, n,
     with tempfile.TemporaryDirectory() as tmpdir:
         info = runpassimFull(golddir, tmpdir, resultdir, n=n, min_align=min_align, beam=beam,
                              floating_ngrams=True, pcopy=pcopy, all_pairs=all_pairs,
-                             min_match=min_match, maxDF=maxDF)
+                             min_match=min_match, maxDF=maxDF, formatting=passimifyPreparedDir)
         info['resultdir'] = resultdir
         info['run_no'] = runno
 
@@ -607,7 +696,7 @@ def _textpairEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, 
         os.chdir(os.getenv('PWD'))
         info = runtextpairFull(golddir, tmpdir, resultdir, ngram, gap, matching_window_size,
                                minimum_matching_ngrams_in_docs, minimum_matching_ngrams_in_window, max_gap,
-                               minimum_matching_ngrams, store_banalities)
+                               minimum_matching_ngrams, store_banalities, formatting=tpairifyPreparedDir)
         os.chdir(os.getenv('PWD'))
 
         info['resultdir'] = resultdir

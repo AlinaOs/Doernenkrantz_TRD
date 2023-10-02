@@ -4,6 +4,8 @@ import lz4.frame as lz4
 import os.path
 import shutil
 import sys
+import subprocess
+import time
 
 from trd.formatting import blastifyDir, passimifyDir, tpairifyDir, filterBlastClusters, reformatPassimOutput
 
@@ -11,12 +13,9 @@ blastpath = '/mnt/c/Projects/BLAST/textreuse-blast/run_full.py'
 if sys.platform.startswith('linux'):
     sys.path.append('/mnt/c/Projects/BLAST/textreuse-blast')
 
-import subprocess
-import time
-
 
 def runblastFull(indir, workingdir, outdir=None, e_value=0.001, word_size=6, language='RIP', min_length=0,
-                 max_length=100000, renamecf=False):
+                 max_length=100000, renamecf=False, formatting=blastifyDir):
     """
     Convenience function for running BLAST with preparation and postprocessing. Internally,
     runblastWithPreparation() is called with the given parameters and the resulting json files in
@@ -43,7 +42,8 @@ def runblastFull(indir, workingdir, outdir=None, e_value=0.001, word_size=6, lan
     if outdir is None:
         outdir = blastout
 
-    rtrn = runblastWithPreparation(indir, workingdir, e_value, word_size, language, min_length, max_length)
+    rtrn = runblastWithPreparation(indir, workingdir, e_value, word_size, language, min_length, max_length,
+                                   formatting=formatting)
 
     clusterfiles = os.listdir(blastout)
     for cf in clusterfiles:
@@ -62,7 +62,7 @@ def runblastFull(indir, workingdir, outdir=None, e_value=0.001, word_size=6, lan
 
 
 def runblastWithPreparation(indir, workingdir, e_value=0.001, word_size=6, language='RIP', min_length=0,
-                            max_length=100000):
+                            max_length=100000, formatting=blastifyDir):
     """
     Convenience function for running BLAST with preparation. The input data is converted to BLAST's own input
     format and saved in the directory workingdir/injson (uncompressed) workingdir/data (compressed). BLAST's output can
@@ -90,8 +90,7 @@ def runblastWithPreparation(indir, workingdir, e_value=0.001, word_size=6, langu
     if not os.path.exists(injson_folder):
         os.mkdir(injson_folder)
 
-    infiles = os.listdir(indir)
-    blastifyDir(indir, injson_folder, infiles, ext='.txt', gzipdir=data_folder)
+    formatting(indir, injson_folder, gzipdir=data_folder)
 
     return runblast(data_folder, output_folder, e_value, word_size, language, min_length, max_length)
 
@@ -137,7 +136,7 @@ def runblast(data_folder, output_folder, e_value=0.001, word_size=6, language='R
 
 
 def runpassimFull(indir, workingdir, outdir=None, n=25, min_match=5, maxDF=100, floating_ngrams=False,
-                  beam=20, min_align=50, pcopy=0.8, all_pairs=False):
+                  beam=20, min_align=50, pcopy=0.8, all_pairs=False, formatting=passimifyDir):
     """
     Convenience function for running Passim with preparation and postprocessing. Internally,
     runpassimWithPreparation() is called with the given parameters and the resulting json file in
@@ -164,7 +163,7 @@ def runpassimFull(indir, workingdir, outdir=None, n=25, min_match=5, maxDF=100, 
         outdir = passimout
 
     rtrn = runpassimWithPreparation(indir, workingdir, n, min_match, maxDF, floating_ngrams,
-                                    beam, min_align, pcopy, all_pairs)
+                                    beam, min_align, pcopy, all_pairs, formatting=formatting)
 
     cf = [of for of in os.listdir(passimout) if of.endswith('.json')][0]
 
@@ -176,7 +175,7 @@ def runpassimFull(indir, workingdir, outdir=None, n=25, min_match=5, maxDF=100, 
 
 
 def runpassimWithPreparation(indir, workingdir, n=25, min_match=5, maxDF=100, floating_ngrams=False,
-                             beam=20, min_align=50, pcopy=0.8, all_pairs=False):
+                             beam=20, min_align=50, pcopy=0.8, all_pairs=False, formatting=passimifyDir):
     """
     Convenience function for running Passim with preparation. The input data is converted to Passim's own input
     format and saved in the directory workingdir/input. Passim's output can be found in workingdir/output.
@@ -202,8 +201,7 @@ def runpassimWithPreparation(indir, workingdir, n=25, min_match=5, maxDF=100, fl
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
-    infiles = os.listdir(indir)
-    passimifyDir(indir, inputfiles, infiles, ext='.txt')
+    formatting(indir, inputfiles)
 
     return runpassim(inputfiles, outdir, n, min_match, maxDF, floating_ngrams, beam, min_align,
                      pcopy, all_pairs)
@@ -266,7 +264,8 @@ def runpassim(indir, outdir, n=25, min_match=5, maxDF=100, floating_ngrams=False
 
 def runtextpairFull(indir, workingdir, outdir=None, ngram=3, gap=0, matching_window_size=30,
                     minimum_matching_ngrams_in_docs=4, minimum_matching_ngrams_in_window=4,
-                    max_gap=15, minimum_matching_ngrams=4, store_banalities=False, word_order=False):
+                    max_gap=15, minimum_matching_ngrams=4, store_banalities=False, word_order=False,
+                    formatting=tpairifyDir):
     """
     Convenience function for running TextPAIR with preparation and postprocessing. Internally,
     runTextPAIRWithPreparation() is called with the given parameters and the resultfile
@@ -296,7 +295,8 @@ def runtextpairFull(indir, workingdir, outdir=None, ngram=3, gap=0, matching_win
 
     rtrn = runtextpairWithPreparation(indir, workingdir, ngram, gap, matching_window_size,
                                       minimum_matching_ngrams_in_docs, minimum_matching_ngrams_in_window,
-                                      max_gap, minimum_matching_ngrams, store_banalities, word_order)
+                                      max_gap, minimum_matching_ngrams, store_banalities, word_order,
+                                      formatting=formatting)
 
     # Unzip the result file, save it in the outdir
     rname = 'alignments.jsonl'
@@ -310,7 +310,8 @@ def runtextpairFull(indir, workingdir, outdir=None, ngram=3, gap=0, matching_win
 
 def runtextpairWithPreparation(indir, workingdir, ngram=3, gap=0, matching_window_size=30,
                                minimum_matching_ngrams_in_docs=4, minimum_matching_ngrams_in_window=4,
-                               max_gap=15, minimum_matching_ngrams=4, store_banalities=False, word_order=False):
+                               max_gap=15, minimum_matching_ngrams=4, store_banalities=False, word_order=False,
+                               formatting=tpairifyDir):
     """
     Convenience function for running TextPAIR with preparation. The input data is converted to TextPAIR's own input
     format and saved in the directory workingdir/input, which contains the following subfolders and files:
@@ -348,9 +349,7 @@ def runtextpairWithPreparation(indir, workingdir, ngram=3, gap=0, matching_windo
 
     dockermount = '/TextPAIR_run'
 
-    infiles = os.listdir(indir)
-    infiles = [f for f in infiles if f.endswith('.txt')]
-    tpairifyDir(indir, inputdir, infiles, ext='.txt')
+    formatting(indir, inputdir)
 
     config = configparser.ConfigParser()
 

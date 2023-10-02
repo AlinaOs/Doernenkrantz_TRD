@@ -184,7 +184,7 @@ class TextExtractor:
                                 h = self.joinLines([head])
 
                             metaText.append([
-                                h,
+                                self._correctSegments(h),
                                 bookpart,
                                 paragraph,
                                 self.currPage,
@@ -202,7 +202,7 @@ class TextExtractor:
                             joined = self.joinLines(pageLines)
                             if joined != '':
                                 pagesText.append([
-                                    joined,
+                                    self._correctSegments(joined),
                                     bookpart,
                                     paragraph,
                                     self.currPage,
@@ -233,7 +233,7 @@ class TextExtractor:
                                 else:
                                     lines.append(q)
                             metaText.append([
-                                self.joinLines(lines),
+                                self._correctSegments(self.joinLines(lines)),
                                 bookpart,
                                 paragraph,
                                 self.currPage,
@@ -253,7 +253,7 @@ class TextExtractor:
                             joined += '-'
 
                         pagesText.append([
-                            joined,
+                            self._correctSegments(joined),
                             bookpart,
                             paragraph,
                             self.currPage,
@@ -263,3 +263,14 @@ class TextExtractor:
                     pageLines.clear()
 
         return pagesText, metaText
+
+    def _correctSegments(self, text):
+        # Remove double whitespaces around segment markers (after removal of the markers, these whitespaces would
+        # get merged and the resulting text included by the segments could differ)
+        text = re.sub(r'\s?(\$segstart[^$]+\$)\s?', r' \1', text)  # segstart
+        text = re.sub(r'\s?(\$segend[^$]+\$)\s?', r'\1 ', text)  # segend
+        text = re.sub(r'\s((\$seg[^$]+\$)+)$', r'\1', text)  # seg marker at string end
+        text = re.sub(r'^((\$seg[^$]+\$)+)\s', r'\1', text)  # seg marker at string beginning
+        text = re.sub(r'\$\s+\$', '$$', text)
+        text = re.sub(r'([.?:!)]+)((\$segend[^$]+\$)+)', r'\2\1', text)
+        return text

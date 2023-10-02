@@ -1075,8 +1075,8 @@ class Pseudolemmatizer:
             leml = []
             for token in tokens:
                 try:
-                    match = re.fullmatch(r'((#SEND#|#CSTART#|#lb#|#INSTART#|#INEND#|\s)*)'
-                                         r'([a-z]+)((#SEND#|#CSTART#|#lb#|#INSTART#|#INEND#|\s)*)', token)
+                    match = re.fullmatch(r'((#SEND#|#CSTART#|#lb#|#INSTART#|#INEND#|\$seg[^$]+\$|\s)*)'
+                                         r'([a-z]+)((#SEND#|#CSTART#|#lb#|#INSTART#|#INEND#|\$seg[^$]+\$|\s)*)', token)
                     if match is None:
                         lem = token
                     else:

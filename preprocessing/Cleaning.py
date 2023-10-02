@@ -243,7 +243,7 @@ class TextCleaner:
     def joinPagebrokenWords(self, lines, normalize=True, lowercase=False, addnorm=None, docid=None):
         # Join words hyphenated or broken over two pages
         brokenword = False
-        checkword = True
+        checkword = False
         for i in range(len(lines)):
             if brokenword:
                 tokens = lines[i][0].split()
