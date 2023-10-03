@@ -305,6 +305,12 @@ def runtextpairFull(indir, workingdir, outdir=None, ngram=3, gap=0, matching_win
         with open(rpath, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
 
+    csvname = 'duplicate_files.csv'
+    csvpath = os.path.join(outdir, csvname)
+    with open(os.path.join(tpout, csvname), 'rb') as f_in:
+        with open(csvpath, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
     return rtrn
 
 
@@ -467,4 +473,5 @@ def runtextpair(basedir, dockermount, outdir, configpath):
         'minimum_matching_ngrams_in_window': config['MATCHING']['minimum_matching_ngrams_in_window'],
         'max_gap': config['MATCHING']['max_gap'],
         'minimum_matching_ngrams': config['MATCHING']['minimum_matching_ngrams'],
+        'store_banalities': True if config['MATCHING']['store_banalities'] == 'true' else False
     }, 'time': timeend - timestart}

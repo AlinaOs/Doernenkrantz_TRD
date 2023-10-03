@@ -1,3 +1,4 @@
+import datetime
 import os
 import shutil
 import tempfile
@@ -6,7 +7,7 @@ from io import StringIO
 import psutil
 
 from tools.rw import saveDictAsJson, readDictFromJson, readFromTxt, readJsonFromJsonlines, readFromCSV, writeToCSV
-from trd.formatting import blastifyPreparedDir, passimifyPreparedDir, tpairifyPreparedDir
+from trd.formatting import blastifyPreparedDir, passimifyPreparedDir, tpairifyPreparedDir, prepareTextsFromDir
 from trd.wrapping import runblastFull, runpassimFull, runtextpairFull
 
 
@@ -43,49 +44,54 @@ def extractReusePairsFromTxt(infile, outfile, fname):
     opensegments = {}
     fid = os.path.splitext(fname)[0]
 
-    with open(infile, 'r', encoding='utf-8') as infile:
-        with open(outfile, 'w', encoding='utf-8') as outfile:
-            towrite = ''
-            nextchar = infile.read(1)
-            offset = 0
-            while nextchar != '':
-                if nextchar == '$':
-                    outfile.write(towrite)
-                    towrite = ''
-                    segmeta = ''
-                    nextchar = infile.read(1)
-                    while nextchar != '$':
-                        segmeta += nextchar
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = os.path.join(tmpdir, 'tmp.text')
+        with open(infile, 'r', encoding='utf-8') as infile:
+            with open(tmppath, 'w', encoding='utf-8') as tmpf:
+                towrite = ''
+                nextchar = infile.read(1)
+                offset = 0
+                while nextchar != '':
+                    if nextchar == '$':
+                        tmpf.write(towrite)
+                        towrite = ''
+                        segmeta = ''
                         nextchar = infile.read(1)
-                    segmeta = segmeta.split('_')
-                    if segmeta[0] == 'segstart':
-                        segments[segmeta[1]] = segmeta[1:]
-                        opensegments[segmeta[1]] = {
-                            'start': offset,
-                            'text': '',
-                            'docid': fid
-                        }
+                        while nextchar != '$':
+                            segmeta += nextchar
+                            nextchar = infile.read(1)
+                        segmeta = segmeta.split('_')
+                        if segmeta[0] == 'segstart':
+                            segments[segmeta[1]] = segmeta[1:]
+                            opensegments[segmeta[1]] = {
+                                'start': offset,
+                                'text': '',
+                                'docid': fid
+                            }
+                        else:
+                            segid = segmeta[1]
+                            opensegments[segid]['end'] = offset - 1
+                            seg = {
+                                'passages': [opensegments.pop(segid)]
+                            }
+                            segmeta = segments[segid]
+                            if len(segmeta) > 1:
+                                seg['type'] = segmeta[1]
+                                seg['corresp'] = segmeta[2]
+                            segments[segid] = seg
+                        nextchar = infile.read(1)
                     else:
-                        segid = segmeta[1]
-                        opensegments[segid]['end'] = offset - 1
-                        seg = {
-                            'passages': [opensegments.pop(segid)]
-                        }
-                        segmeta = segments[segid]
-                        if len(segmeta) > 1:
-                            seg['type'] = segmeta[1]
-                            seg['corresp'] = segmeta[2]
-                        segments[segid] = seg
-                    nextchar = infile.read(1)
-                else:
-                    offset += 1
-                    towrite += nextchar
-                    if len(opensegments) > 0:
-                        for k in opensegments:
-                            opensegments[k]['text'] = opensegments[k]['text'] + nextchar
-                    nextchar = infile.read(1)
-            outfile.write(towrite)
+                        offset += 1
+                        towrite += nextchar
+                        if len(opensegments) > 0:
+                            for k in opensegments:
+                                opensegments[k]['text'] = opensegments[k]['text'] + nextchar
+                        nextchar = infile.read(1)
+                tmpf.write(towrite)
 
+        with open(tmppath, 'rb') as f_in:
+            with open(outfile, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
     return segments
 
 
@@ -104,10 +110,10 @@ def extractReusePairsFromCsv(infile, outfile):
         if len(opensegments.keys()) > 0:
             for k in opensegments:
                 opensegments[k].append({
-                        'start': 0,
-                        'text': '',
-                        'docid': docid
-                    })
+                    'start': 0,
+                    'text': '',
+                    'docid': docid
+                })
         instring = StringIO(l[1])
         newtext = ''
         towrite = ''
@@ -220,7 +226,7 @@ def identicalPassages(match1: list[tuple[str, int, int]], match2: list[tuple[str
     return False
 
 
-def evaluateRecall(testmatches, goldmatches):
+def evaluateRecall(testmatches, goldmatches: list[list[tuple[str, int, int]]]):
     foundgms = []
     # Evaluate the recall of goldmatches
     for gmi in range(len(goldmatches)):
@@ -253,7 +259,7 @@ def findBestRun(runinfos):
             highmatchruns.append(ri)
 
     if len(highmatchruns) == 1:
-        bestrun = runinfos[highmatchruns[0]]
+        bestrun = highmatchruns[0]
     else:
         lownoiseruns = []
         mcount = runinfos[highmatchruns[0]]['testmatch_no']
@@ -264,7 +270,7 @@ def findBestRun(runinfos):
                 lownoiseruns.append(r)
 
         if len(lownoiseruns) == 1:
-            bestrun = runinfos[lownoiseruns[0]]
+            bestrun = lownoiseruns[0]
         else:
             fastruns = []
             tme = runinfos[lownoiseruns[0]]['time']
@@ -273,9 +279,9 @@ def findBestRun(runinfos):
                     fastruns = [r]
                 elif runinfos[r]['time'] == tme:
                     fastruns.append(r)
-            bestrun = runinfos[fastruns[0]]
+            bestrun = fastruns[0]
 
-    return dict(bestrun)
+    return bestrun
 
 
 def humanReadableMatchinfo(matchpairs, textdir, goldmatches):
@@ -291,9 +297,16 @@ def humanReadableMatchinfo(matchpairs, textdir, goldmatches):
 
     texts = dict()
     for f in os.listdir(textdir):
-        txt = readFromTxt(os.path.join(textdir, f))
-        title = f.split('.')[0]
-        texts[title] = txt
+        if not (f.endswith('.txt') or f.endswith('.csv')):
+            continue
+        if f.endswith('.txt'):
+            txt = readFromTxt(os.path.join(textdir, f))
+            title = f.split('.')[0]
+            texts[title] = txt
+        else:
+            lines = readFromCSV(os.path.join(textdir, f))['lines']
+            for l in lines:
+                texts[l[0]] = l[1]
 
     matchinfo = []
     for mp in matchpairs:
@@ -325,8 +338,8 @@ def _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, param
     runnototal = len(runparams)
 
     runno = 0
-    cpuno = int(len(psutil.Process().cpu_affinity())/cpudivisor)
-    if cpuno ==0:
+    cpuno = int(len(psutil.Process().cpu_affinity()) / cpudivisor)
+    if cpuno == 0:
         cpuno = 1
     while runno < runnototal:
         pno = 0
@@ -352,7 +365,7 @@ def _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, param
     return runinfos
 
 
-def evaluateBlast(outdir: str, golddir: str, goldmatches: list[tuple[str, int, int]], e_value: list[float],
+def evaluateBlast(outdir: str, golddir: str, goldmatches: list[list[tuple[str, int, int]]], e_value: list[float],
                   word_size: list[int], evalinfo: dict = None):
     """
     Runs BLAST with each possible combination of the given parameters and returns the results of evaluating each run.
@@ -396,7 +409,7 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[tuple[str, int, i
 
     print('Finding best run.')
     overallinfo['run_details'] = runinfos
-    bestrun = findBestRun(runinfos)
+    bestrun = runinfos[findBestRun(runinfos)]
     bestrun['goldmatches'] = humanReadableMatchinfo(bestrun['goldmatches'], golddir, goldmatches)
     overallinfo['bestrun'] = bestrun
     saveDictAsJson(os.path.join(outdir, 'evaluation.json'), overallinfo)
@@ -408,7 +421,7 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[tuple[str, int, i
           f'and {bestrun["testmatch_no"]} matches in total.')
     print()
 
-    return bestrun["config"]
+    return bestrun
 
 
 def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_value, word_size):
@@ -454,7 +467,7 @@ def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_v
     q.put(info)
 
 
-def evaluatePassim(outdir: str, golddir: str, goldmatches: list[tuple[str, int, int]], n: list[int],
+def evaluatePassim(outdir: str, golddir: str, goldmatches: list[list[tuple[str, int, int]]], n: list[int],
                    min_align: list[int], beam: list[int], pcopy: list[float], all_pairs: list[bool],
                    maxDF: list[int] = None, min_match: list[int] = None, evalinfo: dict = None):
     """
@@ -525,7 +538,7 @@ def evaluatePassim(outdir: str, golddir: str, goldmatches: list[tuple[str, int, 
 
     print('Finding best run.')
     overallinfo['run_details'] = runinfos
-    bestrun = findBestRun(runinfos)
+    bestrun = runinfos[findBestRun(runinfos)]
     bestrun['goldmatches'] = humanReadableMatchinfo(bestrun['goldmatches'], golddir, goldmatches)
     overallinfo['bestrun'] = bestrun
     saveDictAsJson(os.path.join(outdir, 'evaluation.json'), overallinfo)
@@ -539,7 +552,7 @@ def evaluatePassim(outdir: str, golddir: str, goldmatches: list[tuple[str, int, 
           f'and {bestrun["testmatch_no"]} matches in total.')
     print()
 
-    return bestrun["config"]
+    return bestrun
 
 
 def _passimEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, n, min_align, beam,
@@ -586,7 +599,7 @@ def _passimEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, n,
     q.put(info)
 
 
-def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int, int]], ngram: list[int],
+def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[list[tuple[str, int, int]]], ngram: list[int],
                      gap: list[int], matching_window_size: list[int], minimum_matching_ngrams_in_docs: list[int],
                      minimum_matching_ngrams_in_window: list[int], max_gap: list[int],
                      minimum_matching_ngrams: list[int], store_banalities=None, evalinfo: dict = None):
@@ -661,7 +674,7 @@ def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int
 
     print('Finding best run.')
     overallinfo['run_details'] = runinfos
-    bestrun = findBestRun(runinfos)
+    bestrun = runinfos[findBestRun(runinfos)]
     bestrun['goldmatches'] = humanReadableMatchinfo(bestrun['goldmatches'], golddir, goldmatches)
     overallinfo['bestrun'] = bestrun
     saveDictAsJson(os.path.join(outdir, 'evaluation.json'), overallinfo)
@@ -677,7 +690,7 @@ def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[tuple[str, int
     print()
     os.chdir(os.getenv('PWD'))
 
-    return bestrun["config"]
+    return bestrun
 
 
 def _textpairEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, ngram, gap, matching_window_size,
@@ -727,3 +740,110 @@ def _textpairEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, 
 
     saveDictAsJson(os.path.join(resultdir, 'info.json'), info)
     q.put(info)
+
+
+def combievaluateTool(tool: str, golddirs: list[str], outdir: str, params, preparegolddirs=True):
+    """
+    Evaluates the named tool using different parameters as well as different input formats. The function uses the data
+    in the given golddata directories and runs an evaluation on each directory with the given parameters. The results of
+    all directories are than compared and an overall best combination of parameters and input data is determined and the
+    result returned
+
+    :param tool: The name of the tool to be evaluated: 'blast', 'passim', or 'textpair' (case insensitive).
+    :param golddirs: A list of directories containing golddata texts (as .txt or .csv files) in different preprocessing
+        stages.
+    :param outdir: The directory, in which the evaluation results will be saved.
+    :param params: The parameters to test during the evaluation of the tool given as a dictionary or list of
+        dictionaries. If a dictionary is given, the parameters will be used for all golddirs. If a list of dictionaries
+        is given, it must have the same length as the list of golddirs. For every golddir, the corresponding set of
+        params will be used. The evaluated params may therefore differ between golddirs. The key/value-pairs in the
+        dictionary(-ies) take the same form as the parameters for the tool's evaluate function.
+    :param preparegolddirs: Whether or not to prepare the golddirs and extract the text reuse pairs before running the
+        evaluation. If False, the function expects that the golddirs have already been prepared.
+    :return: Information about the best run of the tool in the form of a dictionary.
+    """
+
+    tool = tool.lower()
+    if tool not in ['blast', 'passim', 'textpair']:
+        raise ValueError('Tool name not recognized.')
+
+    outdirs = [os.path.join(outdir, 'input_' + str(i)) for i in range(len(golddirs))]
+
+    print('### Preparing golddata directories.')
+    if preparegolddirs:
+        for i in range(len(golddirs)):
+            gdir = golddirs[i]
+            prepareTextsFromDir(gdir, gdir)
+            extractReusePairsFromDir(gdir, gdir)
+    for i in range(len(golddirs)):
+        os.makedirs(outdirs[i], exist_ok=True)
+
+    bestruns = []
+
+    curr_params = params
+    d = datetime.datetime
+    date = d.now().strftime('%Y-%m-%d')
+
+    dirno = len(golddirs)
+    print('### Starting evaluation.')
+    for i in range(len(golddirs)):
+        gdir = golddirs[i]
+        print(f'{d.now().strftime("%Y-%m-%d %X")} - Iteration {i+1} of {dirno}: '
+              f'Evaluating parameters using golddata from {gdir}')
+        goldmatches = parseGoldmatches(os.path.join(gdir, 'goldmatches.json'))
+        goldmatches = goldmatches[0] + goldmatches[1]
+        evalinfo = {
+            'function': 'combievaluate',
+            'evaldata': gdir,
+            'date': date
+        }
+
+        if isinstance(params, list):
+            curr_params = params[i]
+
+        if tool == 'blast':
+            bestruns.append(evaluateBlast(outdirs[i], gdir, goldmatches,
+                                          e_value=curr_params['e_value'], word_size=curr_params['word_size'],
+                                          evalinfo=evalinfo))
+        elif tool == 'passim':
+            bestruns.append(evaluatePassim(outdirs[i], gdir, goldmatches,
+                                           n=curr_params['n'], min_align=curr_params['min_align'],
+                                           beam=curr_params['beam'], pcopy=curr_params['pcopy'],
+                                           all_pairs=curr_params['all_pairs'],
+                                           maxDF=curr_params.get('maxDF', None),
+                                           min_match=curr_params.get('min_match', None),
+                                           evalinfo=evalinfo))
+        else:
+            bestruns.append(evaluateTextpair(outdirs[i], gdir, goldmatches,
+                                             ngram=curr_params['ngram'], gap=curr_params['gap'],
+                                             matching_window_size=curr_params['matching_window_size'],
+                                             minimum_matching_ngrams_in_docs=
+                                             curr_params['minimum_matching_ngrams_in_docs'],
+                                             minimum_matching_ngrams_in_window=
+                                             curr_params['minimum_matching_ngrams_in_window'],
+                                             max_gap=curr_params['max_gap'],
+                                             minimum_matching_ngrams=curr_params['minimum_matching_ngrams'],
+                                             store_banalities=curr_params['store_banalities'],
+                                             evalinfo=evalinfo))
+
+    print('### Finding the overall best combination.')
+    bestrun = findBestRun(bestruns)
+
+    info = {
+        'date': date,
+        'evaluation': 'combievaluate',
+        'tool': tool,
+        'result': {
+            'dir_idx': bestrun,
+            'dir': golddirs[bestrun],
+            'runinfo': bestruns[bestrun]
+        }
+    }
+
+    saveDictAsJson(os.path.join(outdir, 'combievalinfo.json'), info)
+
+    print('### Best combination:')
+    print(f'Texts: {info["result"]["dir"]}')
+    print(f'Params: {info["result"]["runinfo"]["config"]}')
+
+    return info
