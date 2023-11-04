@@ -192,7 +192,7 @@ def parseGoldmatches(filepath):
     return literal, weak_literal, non_literal
 
 
-def identicalPassages(match1: list[tuple[str, int, int]], match2: list[tuple[str, int, int]]) -> bool:
+def identicalMatches(match1: list[tuple[str, int, int]], match2: list[tuple[str, int, int]]) -> bool:
     """
     Match needs to be a list containing triples, each triple indicating an identifier for the text, the start index and
     end index of the match. The matches are seen as identical, if at least two pairs of triplets can be found, such that
@@ -226,6 +226,103 @@ def identicalPassages(match1: list[tuple[str, int, int]], match2: list[tuple[str
     return False
 
 
+def evaluatePassageOverlap(goldmatch: list[tuple[str, int, int]], testmatch: list[tuple[str, int, int]],
+                           beta=1, ignorefpp=True):
+    true_pos = 0
+    false_pos = 0
+    false_neg = 0
+    all_gm = 0
+
+    tp_found = [False for tp in testmatch]
+    gp_found = []
+
+    # Für jede Goldpassage:
+    for gp in goldmatch:
+        all_gm += gp[2] - gp[1]
+        gp_found.append(None)
+        # für jede Testpassage:
+        for i in range(len(testmatch)):
+            tp = testmatch[i]
+            # Prüfe, ob es sich um dasselbe Dokument handelt. Falls ja, prüfe, ob sich die Indizes überlappen. Falls ja:
+            if gp[0] == tp[0] and (
+                    (gp[1] <= tp[1] <= gp[2])
+                    or
+                    (gp[1] <= tp[2] <= gp[2])
+                    or
+                    (tp[1] <= gp[1] <= tp[2])
+                    or
+                    (tp[1] <= gp[2] <= tp[2])):
+
+                tp_found[i] = True
+                # Berechne, wie groß die Überlappung ist
+                # der kleinster Endindex - größter Anfangsindex
+                ovs = max(tp[1], gp[1])
+                ove = min(tp[2], gp[2])
+                overlap = ove - ovs
+
+                if gp_found[-1] is None:
+                    gp_found.append(overlap)
+                # Sonst: Wenn der F1.5-Score besser ist als vom vorhandenen Wert, ersetze ihn durch die neuen Werte
+                elif gp_found[-1] < overlap:
+                    gp_found.append(overlap)
+
+                # Addiere jeweils, true positives, false positives und false negatives auf
+                true_pos += overlap
+                false_neg += (gp[2] - gp[1]) - overlap
+                false_pos += (tp[2] - tp[1]) - overlap
+
+        if gp_found[-1] is None:
+            false_neg += (gp[2] - gp[1])
+
+    # Für jede Testpassage, die nicht mit einem GM überlappt, addiere fp += len(tp)
+    if not ignorefpp:
+        for i in range(len(testmatch)):
+            if not tp_found[i]:
+                tp = testmatch[i]
+                false_pos += (tp[2] - tp[1])
+
+    # Berechne Precision
+    prec = true_pos / (true_pos + false_pos)
+    # Berechne Recall
+    rec = true_pos / (true_pos + (all_gm - true_pos))
+    # Berechne F1.5-Score
+    f = ((beta ** 2 + 1) * prec * rec) / (beta ** 2 * prec + rec)
+
+    # Gib alles zurück
+    return prec, rec, f
+
+
+def evaluateClusterPrecision(goldmatch: list[tuple[str, int, int]], testmatch: list[tuple[str, int, int]]):
+    tp_found = [False for tp in testmatch]
+
+    # Für jede Goldpassage:
+    for gp in goldmatch:
+        # für jede Testpassage:
+        for i in range(len(testmatch)):
+            tp = testmatch[i]
+            # Prüfe, ob es sich um dasselbe Dokument handelt. Falls ja, prüfe, ob sich die Indizes überlappen. Falls ja:
+            if gp[0] == tp[0] and (
+                    (gp[1] <= tp[1] <= gp[2])
+                    or
+                    (gp[1] <= tp[2] <= gp[2])
+                    or
+                    (tp[1] <= gp[1] <= tp[2])
+                    or
+                    (tp[1] <= gp[2] <= tp[2])):
+
+                tp_found[i] = True
+
+    true_pos = tp_found.count(True)
+    false_pos = tp_found.count(False)
+
+    # Berechne Precision
+    prec = true_pos / (true_pos + false_pos)
+    # Recall und F-Score werden hierfür nicht berechnet, da sie wenig ausssagekräftig sind. Geprüft werden soll nicht,
+    # wieviel gefunden wird, sondern ob das gefundene richtig ist
+
+    return prec
+
+
 def evaluateRecall(testmatches, goldmatches: list[list[tuple[str, int, int]]]):
     foundgms = []
     # Evaluate the recall of goldmatches
@@ -233,7 +330,7 @@ def evaluateRecall(testmatches, goldmatches: list[list[tuple[str, int, int]]]):
         gm = goldmatches[gmi]
         for tmi in range(len(testmatches)):
             tm = testmatches[tmi]
-            if identicalPassages(gm, tm):
+            if identicalMatches(gm, tm):
                 foundgms.append((gmi, tm))
                 break
     return foundgms
@@ -366,7 +463,7 @@ def _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, param
 
 
 def evaluateBlast(outdir: str, golddir: str, goldmatches: list[list[tuple[str, int, int]]], e_value: list[float],
-                  word_size: list[int], evalinfo: dict = None):
+                  word_size: list[int], min_length: list[int], evalinfo: dict = None):
     """
     Runs BLAST with each possible combination of the given parameters and returns the results of evaluating each run.
     Each parameter must be given as a list of parameter values.
@@ -388,11 +485,13 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[list[tuple[str, i
     runparams = []
     for e in e_value:
         for ws in word_size:
-            runparams.append({
-                'e_value': e,
-                'word_size': ws
-            })
-    paramnames = ['e_value', 'word_size']
+            for ml in min_length:
+                runparams.append({
+                    'e_value': e,
+                    'word_size': ws,
+                    'min_length': ml
+                })
+    paramnames = ['e_value', 'word_size', 'min_length']
     target = _blastEvalRun
 
     runinfos = _multiprocessEvalRuns(golddir, outdir, goldmatches, target, runparams, paramnames)
@@ -403,6 +502,7 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[list[tuple[str, i
         'runno': len(runparams),
         'test_e_value': e_value,
         'test_word_size': word_size,
+        'test_min_length': min_length,
         'all_goldmatches': len(goldmatches),
         'note': evalinfo if evalinfo is not None else dict()
     }
@@ -415,8 +515,8 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[list[tuple[str, i
     saveDictAsJson(os.path.join(outdir, 'evaluation.json'), overallinfo)
 
     print('Evaluation finished.')
-    print(f'Best run uses an e_value of {bestrun["config"]["e_value"]} and a word_size '
-          f'of {bestrun["config"]["word_size"]}.')
+    print(f'Best run uses an e_value of {bestrun["config"]["e_value"]}, a word_size '
+          f'of {bestrun["config"]["word_size"]} and a min_length of {bestrun["config"]["word_size"]}.')
     print(f'The run found {bestrun["goldmatch_no"]} of {len(goldmatches)} goldmatches '
           f'and {bestrun["testmatch_no"]} matches in total.')
     print()
@@ -424,7 +524,7 @@ def evaluateBlast(outdir: str, golddir: str, goldmatches: list[list[tuple[str, i
     return bestrun
 
 
-def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_value, word_size):
+def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_value, word_size, min_length):
     print()
     print(f'### Performing run {runno + 1} of {runnototal}')
 
@@ -434,7 +534,8 @@ def _blastEvalRun(runno, runnototal, golddir, outdir, goldmatches, q: Queue, e_v
     os.mkdir(resultdir)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        info = runblastFull(golddir, tmpdir, resultdir, e_value, word_size, formatting=blastifyPreparedDir)
+        info = runblastFull(golddir, tmpdir, resultdir, e_value, word_size, min_length=min_length,
+                            formatting=blastifyPreparedDir)
         info['resultdir'] = resultdir
         info['run_no'] = runno
 
@@ -651,6 +752,16 @@ def evaluateTextpair(outdir: str, golddir: str, goldmatches: list[list[tuple[str
                                         'store_banalities': sb
                                     })
 
+    # Discard all non-reasonable runparams, i.e. where 'minimum_matching_ngrams_in_window' is smaller than
+    # 'minimum_matching_ngrams' or where 'minimum_matching_ngrams_in_docs' is not equal to 'minimum_matching_ngrams'
+    # where 'max_gap' is greater than 'matching_window_size' or where 'gap' is greater than 'ngram'
+    runparams = [
+        rp for rp in runparams if rp['ngram'] >= rp['gap'] and
+                                  rp['minimum_matching_ngrams_in_docs'] == rp['minimum_matching_ngrams'] and
+                                  rp['minimum_matching_ngrams_in_window'] == rp['minimum_matching_ngrams'] and
+                                  rp['max_gap'] <= rp['matching_window_size']
+    ]
+
     paramnames = ['ngram', 'gap', 'matching_window_size', 'minimum_matching_ngrams_in_docs',
                   'minimum_matching_ngrams_in_window', 'max_gap', 'minimum_matching_ngrams', 'store_banalities']
     target = _textpairEvalRun
@@ -788,7 +899,7 @@ def combievaluateTool(tool: str, golddirs: list[str], outdir: str, params, prepa
     print('### Starting evaluation.')
     for i in range(len(golddirs)):
         gdir = golddirs[i]
-        print(f'{d.now().strftime("%Y-%m-%d %X")} - Iteration {i+1} of {dirno}: '
+        print(f'{d.now().strftime("%Y-%m-%d %X")} - Iteration {i + 1} of {dirno}: '
               f'Evaluating parameters using golddata from {gdir}')
         goldmatches = parseGoldmatches(os.path.join(gdir, 'goldmatches.json'))
         goldmatches = goldmatches[0] + goldmatches[1]
@@ -803,7 +914,9 @@ def combievaluateTool(tool: str, golddirs: list[str], outdir: str, params, prepa
 
         if tool == 'blast':
             bestruns.append(evaluateBlast(outdirs[i], gdir, goldmatches,
-                                          e_value=curr_params['e_value'], word_size=curr_params['word_size'],
+                                          e_value=curr_params['e_value'],
+                                          word_size=curr_params['word_size'],
+                                          min_length=curr_params['min_length'],
                                           evalinfo=evalinfo))
         elif tool == 'passim':
             bestruns.append(evaluatePassim(outdirs[i], gdir, goldmatches,
@@ -847,3 +960,288 @@ def combievaluateTool(tool: str, golddirs: list[str], outdir: str, params, prepa
     print(f'Params: {info["result"]["runinfo"]["config"]}')
 
     return info
+
+def hasMatch(match: list[tuple[str, int, int]], matchlist: list[list[tuple[str, int, int]]]):
+    for m in matchlist:
+        if identicalMatches(match, m):
+            return True
+    return False
+
+
+def fm(T: list[list[tuple[str, int, int]]], G: list[list[tuple[str, int, int]]]):
+    G_T = [M_g for M_g in G if hasMatch(M_g, T)]
+    T_G = [M_t for M_t in T if hasMatch(M_t, G)]
+
+    R = len(G_T) / len(G)
+    if len(T) == 0:
+        P = 0
+    else:
+        P = len(T_G) / len(T)
+    if R == 0 and P == 0:
+        F = 0.
+    else:
+        F = (2 * P * R) / (P + R)
+
+    return R, P, F
+
+
+def fch(T: list[list[tuple[str, int, int]]], G: list[list[tuple[str, int, int]]]):
+    allO_g = dict()
+    allS_g = set()
+    allO_t = dict()
+    allS_t = set()
+
+    for M_g in G:
+        for M_t in T:
+            if not identicalMatches(M_g, M_t):
+                continue
+            for pg in M_g:
+                for pt in M_t:
+                    if pg[0] == pt[0] and (
+                            (pg[1] <= pt[1] <= pg[2])
+                            or
+                            (pg[1] <= pt[2] <= pg[2])
+                            or
+                            (pt[1] <= pg[1] <= pt[2])
+                            or
+                            (pt[1] <= pg[2] <= pt[2])):
+                        allS_g.add(pg)
+                        allS_t.add(pt)
+                        g_indices = set(range(pg[1], pg[2] + 1))
+                        t_indices = set(range(pt[1], pt[2] + 1))
+                        overlap = g_indices.intersection(t_indices)
+                        allO_g[pg] = allO_g.get(pg, set()).union(overlap)
+                        allO_t[pt] = allO_t.get(pt, set()).union(overlap)
+
+    allS_g = [(p[2] + 1) - p[1] for p in allS_g]  # no of chars per overlapped passage in G
+    allS_t = [(p[2] + 1) - p[1] for p in allS_t]  # no of chars per overlapping passage in T
+    allO_g = [len(allO_g[k]) for k in allO_g.keys()]  # no of overlapped chars per overlapped passage in G
+    allO_t = [len(allO_t[k]) for k in allO_t.keys()]  # no of overlapping chars per overlapping passage in T
+
+    if len(allS_g) == 0:
+        R = 0
+    else:
+        R = sum(allO_g) / sum(allS_g)
+    if len(allS_t) == 0:
+        P = 0
+    else:
+        P = sum(allO_t) / sum(allS_t)
+
+    if R == 0 and P == 0:
+        F = 0.0
+    else:
+        F = (2 * P * R) / (P + R)
+
+    return R, P, F
+
+
+def fcl(T: list[list[tuple[str, int, int]]], G: list[list[tuple[str, int, int]]]):
+    allG_t = set()  # all detected goldmatches
+    allS_g = set()  # all overlapped passages in G
+    allT_g = set()  # all detecting testmatches
+    allS_t = set()  # all overlapping passages in T
+
+    for i in range(len(G)):
+        M_g = G[i]
+        for j in range(len(T)):
+            M_t = T[j]
+            if not identicalMatches(M_g, M_t):
+                continue
+            for pg in M_g:
+                for pt in M_t:
+                    matching_pg = set()
+                    matching_pt = set()
+                    if pg[0] == pt[0] and (
+                            (pg[1] <= pt[1] <= pg[2])
+                            or
+                            (pg[1] <= pt[2] <= pg[2])
+                            or
+                            (pt[1] <= pg[1] <= pt[2])
+                            or
+                            (pt[1] <= pg[2] <= pt[2])):
+                        matching_pg.add(pg)
+                        matching_pt.add(pt)
+                        allS_g.add(pg)
+                        allS_t.add(pt)
+
+                    if len(matching_pg) > 0:
+                        allG_t.add(i)
+                        allT_g.add(j)
+
+    allG_t = [len(G[M_g]) for M_g in allG_t]  # no of passages per detected match in G
+    allT_g = [len(T[M_t]) for M_t in allT_g]  # no of passages per detecting match in T
+
+    if len(allG_t) == 0:
+        R = 0
+    else:
+        R = len(allS_g) / sum(allG_t)
+    if len(allT_g) == 0:
+        P = 0
+    else:
+        P = len(allS_t) / sum(allT_g)
+    if R == 0 and P == 0:
+        F = 0.0
+    else:
+        F = (2 * P * R) / (P + R)
+
+    return R, P, F
+
+
+def calculateEvalScores(type: str, G: list[list[tuple[str, int, int]]], runoutput: str):
+    """
+
+    :param type: 'blast', 'passim' or 'textpair'.
+    :param G: The golddata against which the run should be evaluated.
+    :param runoutput: The path to the output folder of the run.
+    :return: F_m, F_ch, F_cl
+    """
+    type = type.lower()
+    T = []
+
+    if type == "passim":
+        rundata = readDictFromJson(os.path.join(runoutput, 'out.json'))
+        for m in rundata['clusters']:
+            match = []
+            for p in m['matches']:
+                passage = (p['id'], p['begin'], p['end'])
+                match.append(passage)
+            T.append(match)
+    elif type == "blast":
+        clusterfiles = os.listdir(runoutput)
+        for cf in clusterfiles:
+            if cf == 'info.json':
+                continue
+            rundata = dict(readDictFromJson(os.path.join(runoutput, cf)))
+            for k in rundata.keys():
+                m = rundata[k]
+                match = []
+                for p in m['hits']:
+                    passage = (p['doc_id'], p['original_indices'][0], p['original_indices'][1])
+                    match.append(passage)
+                T.append(match)
+    elif type == "textpair":
+        rundata = readJsonFromJsonlines(os.path.join(runoutput, 'alignments.jsonl'))
+        for m in rundata:
+            match = []
+            source_id = os.path.split(m['source_filename'])[1][0:-4]
+            target_id = os.path.split(m['target_filename'])[1][0:-4]
+            source = (source_id, m['source_start_byte'], m['source_end_byte'])
+            target = (target_id, m['target_start_byte'], m['target_end_byte'])
+            match.append(source)
+            match.append(target)
+            T.append(match)
+    else:
+        raise ValueError
+
+    sfm = fm(T, G)
+    sfch = fch(T, G)
+    sfcl = fcl(T, G)
+
+    return sfm, sfch, sfcl
+
+
+def collectEvalScores(combievaldir, output):
+    evaldata = []
+    evaldirs = os.listdir(combievaldir)
+    for evaldir in evaldirs:
+        dirpath = os.path.join(combievaldir, evaldir)
+        if not os.path.isdir(dirpath):
+            continue
+        print('Collecting scores for: ' + dirpath)
+        evalinfo = readDictFromJson(os.path.join(dirpath, 'evaluation.json'))
+        tool = evalinfo.get('tool', evalinfo['test_tool'])
+
+        inputdata = os.path.split(evalinfo['note']['evaldata'])
+        seg = inputdata[1]
+        inputdata = os.path.split(inputdata[0])[1]
+        norm = 1 if inputdata.startswith('norm') else 0
+        if inputdata.endswith('lem'):
+            lem = 1
+        elif inputdata.endswith('lem-ft'):
+            lem = 2
+        elif inputdata.endswith('lem-ren'):
+            lem = 3
+        else:
+            lem = 0
+
+        G = parseGoldmatches(os.path.join(evalinfo['note']['evaldata'], 'goldmatches.json'))
+        G = list(G[0] + G[1])
+        for run in evalinfo['run_details']:
+            scores = calculateEvalScores(tool.lower(), G, run['resultdir'])
+            rdet = [
+                tool,
+                run['resultdir'],
+                run['testmatch_no'],
+                run['goldmatch_no']
+            ]
+            rdet.extend(scores[0])
+            rdet.extend(scores[1])
+            rdet.extend(scores[2])
+            rdet.extend([
+                run['time'],
+                seg,
+                norm,
+                lem
+            ])
+
+            rdet.extend(paramstolist(tool.lower(), run['config']))
+            evaldata.append(rdet)
+
+    header = ['tool', 'resultdir', 'detected_tms', 'detected_gms',
+              'r_m', 'p_m', 'f_m',
+              'r_ch', 'p_ch', 'f_ch',
+              'r_cl', 'p_cl', 'f_cl',
+              'runtime', 'seg', 'norm', 'lem'
+              ]
+
+    tool = evaldata[0][0].lower()
+    paramhead = []
+    if tool == 'blast':
+        paramhead = ['word_size', 'e_value', 'min_length', 'max_length', 'language']
+    if tool == 'passim':
+        paramhead = ['n', 'min_align', 'min_match', 'maxDF', 'floating_ngrams', 'beam', 'pcopy', 'all_pairs']
+    if tool == 'textpair':
+        paramhead = ['ngram', 'gap', 'matching_window_size', 'minimum_matching_ngrams_in_docs',
+                     'minimum_matching_ngrams_in_window', 'max_gap', 'minimum_matching_ngrams', 'store_banalities']
+
+    header.extend(paramhead)
+
+    writeToCSV(output, evaldata, header)
+
+
+def paramstolist(tool: str, config: dict):
+    tool = tool.lower()
+    if tool == 'blast':
+        plist = [
+            config['word_size'],
+            config['e_value'],
+            config['min_length'],
+            config['max_length'],
+            config['language']
+        ]
+    elif tool == 'passim':
+        plist = [
+            config['n'],
+            config['min_align'],
+            config['min_match'],
+            config['maxDF'],
+            config['floating_ngrams'],
+            config['beam'],
+            config['pcopy'],
+            config['all_pairs']
+        ]
+    elif tool == 'textpair':
+        plist = [
+            config['ngram'],
+            config['gap'],
+            config['matching_window_size'],
+            config['minimum_matching_ngrams_in_docs'],
+            config['minimum_matching_ngrams_in_window'],
+            config['max_gap'],
+            config['minimum_matching_ngrams'],
+            config['store_banalities']
+        ]
+    else:
+        raise ValueError
+
+    return plist
